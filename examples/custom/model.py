@@ -8,7 +8,7 @@ register_template(
         prefix=['<extra_id_0>System\n{{SYSTEM}}\n'],
         prompt=['<extra_id_1>User\n{{QUERY}}\n<extra_id_1>Assistant\n'],
         chat_sep=['\n']))
-
+# 
 register_model(
     ModelMeta(
         model_type='custom',
