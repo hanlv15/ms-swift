@@ -61,14 +61,19 @@ class SwiftDeploy(SwiftInfer):
         try:
             yield
         finally:
-            self._compute_infer_stats()
+            if args.log_interval > 0:
+                self._compute_infer_stats()
 
-    async def get_available_models(self):
+    def _get_model_list(self):
         args = self.args
         model_list = [args.served_model_name or args.model_suffix]
         if args.lora_request_list is not None:
             model_list += [lora_request.lora_name for lora_request in args.lora_request_list]
-        data = [Model(id=model_id, owned_by=args.owned_by) for model_id in model_list]
+        return model_list
+
+    async def get_available_models(self):
+        model_list = self._get_model_list()
+        data = [Model(id=model_id, owned_by=self.args.owned_by) for model_id in model_list]
         return ModelList(data=data)
 
     async def _check_model(self, request: ChatCompletionRequest) -> Optional[str]:
@@ -156,6 +161,7 @@ class SwiftDeploy(SwiftInfer):
 
     def run(self):
         args = self.args
+        logger.info(f'model_list: {self._get_model_list()}')
         uvicorn.run(
             self.app, host=args.host, port=args.port, ssl_keyfile=args.ssl_keyfile, ssl_certfile=args.ssl_certfile)
 
@@ -174,7 +180,7 @@ def is_accessible(port: int):
 
 
 @contextmanager
-def run_deploy(args, return_url: bool = False):
+def run_deploy(args: DeployArguments, return_url: bool = False):
     if isinstance(args, DeployArguments) and args.__class__.__name__ == 'DeployArguments':
         deploy_args = args
     else:

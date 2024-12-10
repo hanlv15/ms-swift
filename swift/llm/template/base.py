@@ -79,10 +79,9 @@ class Template(ProcessorMixin):
         else:
             template_meta = deepcopy(template_meta)
         # if default_system is None. not change self.default_system
+        template_meta.check_system(default_system)
         if default_system is not None:
-            self.default_system = template_meta.check_system(default_system)
-        else:
-            self.default_system = template_meta.default_system
+            template_meta.default_system = default_system
 
         template_meta.init(tokenizer)
 
@@ -108,7 +107,7 @@ class Template(ProcessorMixin):
     def _load_images(images, load_images: bool) -> None:
         for i, image in enumerate(images):
             if load_images:
-                if isinstance(image, dict):
+                if isinstance(image, dict) and 'bytes' in image:
                     image = image['bytes'] or image['path']
                 image = load_image(image)
             else:
@@ -200,8 +199,8 @@ class Template(ProcessorMixin):
         self._preprocess_inputs(inputs)
         if self.mode in {'vllm', 'lmdeploy'}:
             encoded = Template._encode(self, inputs)
-            if inputs.images:
-                encoded['images'] = inputs.images
+            for key in ['images', 'audios', 'videos']:
+                encoded[key] = getattr(inputs, key)
         elif self.mode in {'pt', 'train'}:
             encoded = self._encode(inputs)
         elif self.mode == 'rlhf':
@@ -519,7 +518,7 @@ class Template(ProcessorMixin):
 
     def _jinja_encode(self, inputs: StdTemplateInputs):
         messages = inputs.messages.copy()
-        if inputs.system:
+        if inputs.system is not None:
             messages.insert(0, {'role': 'system', 'content': inputs.system})
         if messages[-1]['content'] is None:
             messages.pop()
@@ -530,9 +529,9 @@ class Template(ProcessorMixin):
     def _swift_encode(self, inputs: StdTemplateInputs):
         template_meta = self.template_meta
         system = inputs.system
+        template_meta.check_system(system)
         if system is None:
-            system = self.default_system
-        system = template_meta.check_system(system)
+            system = template_meta.default_system
 
         res_context_list: List[Context] = []
         res_context_types: List[ContextType] = []
@@ -541,7 +540,7 @@ class Template(ProcessorMixin):
             res_context_list.append(bos_tokens)
             res_context_types.append(ContextType.OTHER)
 
-        prefix = template_meta.system_prefix if system else template_meta.prefix
+        prefix = template_meta.prefix if system is None else template_meta.system_prefix
         self._concat_context_list(prefix, res_context_list, res_context_types, system=system)
 
         n_round = len(inputs.messages) // 2

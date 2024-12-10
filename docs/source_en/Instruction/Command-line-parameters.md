@@ -15,8 +15,8 @@ The introduction to command line parameters will cover base arguments, atomic ar
 
 ### Model Arguments
 
-- 🔥model: Model ID or local path to the model. If it's a custom model, please use it with `model_type` and `template`.
-- model_type: Model type. The same model architecture, template, and loading process define a model type.
+- 🔥model: Model ID or local path to the model. If it's a custom model, please use it with `model_type` and `template`. The specific details can be referred to in the [Custom Model](../Customization/Custom-model.md).
+- model_type: Model type. The same model architecture, template, and loading process define a model_type.
 - model_revision: Model version.
 - 🔥torch_dtype: Data type for model weights, supports `float16`, `bfloat16`, `float32`, default is read from the config file.
 - attn_impl: Attention type, supports `flash_attn`, `sdpa`, `eager`, default is sdpa.
@@ -25,8 +25,7 @@ The introduction to command line parameters will cover base arguments, atomic ar
 - local_repo_path: Some models require a GitHub repo when loading. To avoid network issues during `git clone`, you can directly use a local repo. This parameter needs to pass the local repo path, default is `None`.
 
 ### Data Arguments
-
-- 🔥dataset: Dataset ID or path. The format is `dataset_id or dataset_path:sub_dataset#sample_count`, where sub_dataset and sample_count are optional. Use spaces to pass multiple datasets. Local datasets support jsonl, csv, json, and folders, etc.
+- 🔥dataset: Dataset ID or path. The format is `dataset_id or dataset_path:sub_dataset#sample_count`, where sub_dataset and sample_count are optional. Use spaces to pass multiple datasets. Local datasets support jsonl, csv, json, and folders, etc. For custom datasets, you can refer to [Custom Dataset](../Customization/Custom-dataset.md).
 - 🔥val_dataset: Validation dataset ID or path.
 - 🔥split_dataset_ratio: How to split the training and validation sets when val_dataset is not specified, default is 0.01.
 - data_seed: Random seed for the dataset, default is 42.
@@ -38,17 +37,16 @@ The introduction to command line parameters will cover base arguments, atomic ar
 - strict: If True, the dataset will throw an error if any row has a problem; otherwise, it will discard the erroneous row. Default is False.
 - 🔥model_name: For self-awareness tasks, input the model's Chinese and English names separated by space.
 - 🔥model_author: For self-awareness tasks, input the model author's Chinese and English names separated by space.
-- custom_dataset_info: Custom simple dataset registration, refer to [Add New Dataset](../Customization/New-dataset.md).
+- custom_dataset_info: Custom simple dataset registration, refer to the [Custom Dataset](../Customization/Custom-dataset.md) Documentation.
 
 ### Template Arguments
-
-- 🔥template: Template type, default uses the corresponding template type of the model. If it is a custom model, please refer to [Supported Models and Datasets](./Supported-models-and-datasets) and manually input this field.
+- 🔥template: Type of dialogue template, which defaults to the template type corresponding to the model. `swift pt` will convert the dialogue template into a generation template for use.
 - 🔥system: Custom system field, default is None, uses the default system of the template.
 - 🔥max_length: Maximum length of tokens for a single sample, default is None (no limit).
 - truncation_strategy: How to handle overly long tokens, supports `delete` and `left`, representing deletion and left trimming, default is left.
 - 🔥max_pixels: Maximum pixel count for pre-processing images in multimodal models (H*W), default is no scaling.
 - tools_prompt: The list of tools for agent training converted to system format, refer to [Agent Training](./Agent-support.md), default is 'react_en'.
-- loss_scale: How to add token loss weight during training. Default is `'default'`, meaning all responses (including history) are treated as 1 for cross-entropy loss. For specifics, see [Plugin](../Customization/plugin.md) and [Agent Training](./Agent-support.md).
+- loss_scale: How to add token loss weight during training. Default is `'default'`, meaning all responses (including history) are treated as 1 for cross-entropy loss. For specifics, see [Pluginization](../Customization/Pluginization.md) and [Agent Training](./Agent-support.md).
 - sequence_parallel_size: Number of sequence parallelism. Refer to [example](https://github.com/modelscope/ms-swift/tree/main/examples/train/sequence_parallel/train.sh).
 - use_chat_template: Use chat template or generation template, default is `True`. `swift pt` is automatically set to the generation template.
 - template_backend: Use swift or jinja for inference. If using jinja, it will utilize transformers' `apply_chat_template`. Default is swift.
@@ -87,7 +85,7 @@ This parameter list inherits from transformers `Seq2SeqTrainingArguments`, with 
 
 - 🔥output_dir: Default is `output/<model_name>`.
 - 🔥gradient_checkpointing: Whether to use gradient checkpointing, default is True.
-- 🔥deepspeed: Default is None. Can be set to 'zero2', 'zero3', 'zero2-offload', 'zero3-offload' to use the built-in deepspeed configuration files from ms-swift.
+- 🔥deepspeed: Default is None. Can be set to 'zero2', 'zero3', 'zero2_offload', 'zero3_offload' to use the built-in deepspeed configuration files from ms-swift.
 - 🔥per_device_train_batch_size: Default is 1.
 - 🔥per_device_eval_batch_size: Default is 1.
 - weight_decay: Weight decay coefficient, default value is 0.1.
@@ -119,18 +117,20 @@ Other important parameters:
 - 🔥ddp_find_unused_parameters: Default is None.
 - 🔥dataloader_num_workers: Default is 0.
 - 🔥neftune_noise_alpha: Noise coefficient added by neftune, default is 0. Generally can be set to 5, 10, 15.
+- max_grad_norm: Gradient clipping. The default value is 1.
 - push_to_hub: Push training weights to hub, default is False.
 - hub_model_id: Default is None.
 - hub_private_repo: Default is False.
 
 ### Tuner Arguments
 
+- 🔥freeze_llm: Freeze LLM. Default is False. Applicable for full parameters and LoRA.
 - 🔥freeze_vit: Freeze ViT. Default is True. Applicable for full parameters and LoRA.
 - 🔥freeze_aligner: Freeze aligner. Default is True, applicable for full parameters and LoRA.
-- 🔥freeze_llm: Freeze LLM. Default is False. Applicable for full parameters and LoRA.
-- 🔥target_modules: Specify the LoRA module, default is `all-linear`, automatically finds linear layers except for lm_head and attaches the tuner. This parameter is not limited to LoRA.
+- 🔥target_modules: Specify the LoRA module, default is `all-linear`, automatically finds linear layers except for lm_head and attaches the tuner. You can also specify `--target_modules all-linear all-embedding` to select the linear and embedding layers. This parameter is not limited to LoRA.
 - 🔥target_regex: Specify a regex expression for the LoRA module. Default is `None`, if this value is provided, target_modules does not take effect. This parameter is not limited to LoRA.
-- modules_to_save: After the tuner is attached, the original model's modules used during training and storage, default is `[]`. This parameter is not limited to LoRA.
+- 🔥init_weights: The method of init tuner weights, For lora the accepted values are `true`, `false`, `guassian`, `pissa`, `pissa_niter_[number of iters]`, for bone are `true`, `false`, `bat`, default is `true`
+- modules_to_save: After the tuner is attached, the original model's modules used during training and storage, default is `[]`. You can specify `all-embedding` to select the embedding layers, and `all-norm` to select the layer normalization and RMS normalization layers. This parameter is not limited to LoRA.
 
 #### Full Arguments
 
@@ -143,7 +143,6 @@ Other important parameters:
 - 🔥lora_rank: Default is `8`.
 - 🔥lora_alpha: Default is `32`.
 - lora_dropout: Default is `0.05`.
-- 🔥init_lora_weights: Method to initialize LoRA weights, can be specified as `true`, `false`, `gaussian`, `pissa`, `pissa_niter_[number of iters]`, default is `true`.
 - lora_bias: Default is `'none'`, selectable values are: 'none', 'all'. If you want to set all biases as trainable, you can set it to `'all'`.
 - lora_dtype: Specify the dtype of the LoRA module. Supports 'float16', 'bfloat16', 'float32', defaults to the original model type.
 - 🔥use_dora: Default is `False`, whether to use `DoRA`.
@@ -244,13 +243,6 @@ The following parameters are effective when `train_type` is set to `reft`.
 
 - use_liger: Use liger-kernel for training.
 
-### TorchAcc Arguments
-
-- model_layer_cls_name: Class name of Decoder layer.
-- metric_warmup_step: Warmup steps for TorchAcc, default is 1.
-- fsdp_num: Number of FSDP, default is 1.
-- acc_steps: Number of steps for evaluating accuracy during training, default is 1.
-
 ### LMDeploy Arguments
 
 Parameter meanings can be found in the [lmdeploy documentation](https://lmdeploy.readthedocs.io/en/latest/api/pipeline.html#turbomindengineconfig).
@@ -286,7 +278,7 @@ Parameter meanings can be found in the [vllm documentation](https://docs.vllm.ai
 
 ### Training Arguments
 
-Training arguments include the [base arguments](#base-arguments), [Seq2SeqTrainer arguments](#Seq2SeqTrainer-arguments), [tuner arguments](#tuner-arguments), [torchacc arguments](#torchacc-arguments), and also include the following parts:
+Training arguments include the [base arguments](#base-arguments), [Seq2SeqTrainer arguments](#Seq2SeqTrainer-arguments), [tuner arguments](#tuner-arguments), and also include the following parts:
 
 - add_version: Add directory to output_dir with `'<version>-<timestamp>'` to prevent weight overwrite, default is True.
 - resume_only_model: If resume_from_checkpoint, only resume model weights, default is False.
@@ -297,7 +289,7 @@ Training arguments include the [base arguments](#base-arguments), [Seq2SeqTraine
 - packing: Whether to use packing, default is False.
 - 🔥lazy_tokenize: Whether to use lazy_tokenize, default is False during LLM training, default is True during MLLM training.
 
-- acc_strategy: Strategy for training accuracy, can be `sentence` or `token` level accuracy, default is `token`.
+- acc_strategy: Strategy for training accuracy, can be `seq` or `token` level accuracy, default is `token`.
 - max_new_tokens: Maximum generated token count when `predict_with_generate=True`, default 64.
 - temperature: Temperature when `predict_with_generate=True`, default 0.
 - optimizer: Custom optimizer name for plugin.
@@ -331,7 +323,7 @@ Inference arguments include the [base arguments](#base-arguments), [merge argume
 - 🔥ckpt_dir: Path to the model checkpoint folder, default is None.
 - 🔥infer_backend: Inference backend, supports 'pt', 'vllm', 'lmdeploy', default is 'pt'.
 - 🔥max_batch_size: Batch size for pt backend, default is 1.
-- result_path: Path to store inference results (jsonl), default is None.
+- result_path: Path to store inference results (jsonl), default is None, saved in the checkpoint directory or './result' directory.
 - val_dataset_sample: Number of samples from the inference dataset, default is None.
 
 ### Deployment Arguments
@@ -344,7 +336,7 @@ Deployment Arguments inherit from the [inference arguments](#inference-arguments
 - owned_by: Default is `swift`.
 - 🔥served_model_name: Model name for serving, defaults to the model's suffix.
 - verbose: Print access logs, default is True.
-- log_interval: Interval for printing tokens/s statistics, default is 20 seconds.
+- log_interval: Interval for printing tokens/s statistics, default is 20 seconds. If set to -1, it will not be printed.
 - max_logprobs: Maximum number of logprobs to return, default is 20.
 
 ### Evaluation Arguments

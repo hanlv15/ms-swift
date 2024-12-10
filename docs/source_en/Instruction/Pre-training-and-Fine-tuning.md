@@ -2,7 +2,7 @@
 
 Since pre-training and fine-tuning are quite similar, they will be discussed together in this section.
 
-For the data format requirements for pre-training and fine-tuning, please refer to the section on [Adding Datasets](../Customization/New-dataset.md).
+For the data format requirements for pre-training and fine-tuning, please refer to the section on [Custom Dataset](../Customization/Custom-dataset.md).
 
 In terms of data requirements, the amount needed for continued pre-training can range from hundreds of thousands to millions of rows. Starting pre-training from scratch requires significantly more resources and data, which is beyond the scope of this article.
 The data needed for fine-tuning can vary from a few thousand to a million rows. For lower data requirements, consider using RAG methods.
@@ -30,7 +30,6 @@ Additionally, other technologies and examples supported by SWIFT include:
 - **Packing**: This combines multiple sequences into one, helping each sample to approach the set max_length during training, improving GPU utilization. See [here](https://github.com/modelscope/swift/blob/main/examples/train/packing/train.sh).
 - **Streaming Training**: This method continuously reads data, reducing memory usage when handling large datasets. Check [here](https://github.com/modelscope/swift/blob/main/examples/train/streaming/train.sh) for details.
 - **Lazy Tokenization**: Suitable for scenarios where a fixed amount of data is read in at once, and images are parsed during training. Refer to [here](https://github.com/modelscope/swift/blob/main/examples/train/lazy_tokenize/train.sh).
-- **torchacc**: This aids in speeding up training when packing to fixed lengths. More information can be found [here](https://github.com/modelscope/swift/blob/main/examples/train/torchacc).
 - **Agent Training**: For more details, see [here](https://github.com/modelscope/swift/blob/main/examples/train/agent).
 
 **Tips**:
