@@ -93,6 +93,20 @@ register_model(
         model_arch=ModelArch.llama,
     ))
 
+register_model(
+    ModelMeta(
+        model_type=LLMModelType.llama3_2,
+        model_groups=[
+            ModelGroup([
+                Model(model_path='/home/css/models/llama-3.3-70b-instruct-awq'),
+            ])
+        ],
+        template=LLMTemplateType.llama3_2,
+        get_function=get_model_tokenizer_with_flash_attn,
+        architectures=['LlamaForCausalLM'],
+        requires=['transformers>=4.45'],
+        model_arch=ModelArch.llama,
+    ))
 
 if __name__ == '__main__':
     infer_request = InferRequest(messages=[{'role': 'user', 'content': 'who are you?'}])
