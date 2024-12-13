@@ -61,8 +61,6 @@ class RowPreprocessor:
             messages = messages[1:]
         if messages and messages[0]['role'] == 'assistant':
             messages = [{'role': 'user', 'content': ''}] + messages  # pretrain
-        if len(messages) % 2 == 1:
-            raise ValueError(f'len(messages): {len(messages)}')
         for user_message, assistant_message in zip(messages[::2], messages[1::2]):
             if (user_message['role'] not in {'user', 'tool'} or 'content' not in user_message
                     or user_message['content'] is None):
@@ -127,6 +125,8 @@ class RowPreprocessor:
                 if k not in batched:
                     batched[k] = [None] * i
                 batched[k].append(v)
+        # Make all the lengths of v the same.
+        batched = {k: v + [None] * (len(rows) - len(v)) for k, v in batched.items()}
         return batched
 
     @staticmethod

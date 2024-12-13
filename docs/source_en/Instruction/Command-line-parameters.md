@@ -92,6 +92,7 @@ This parameter list inherits from transformers `Seq2SeqTrainingArguments`, with 
 - 🔥learning_rate: Learning rate, default is 1e-5 for all parameters, and 1e-4 for the tuner.
 - lr_scheduler_type: LR scheduler type, default is cosine.
 - lr_scheduler_kwargs: Other parameters for the LR scheduler.
+- 🔥gradient_checkpointing_kwargs: Parameters passed to `torch.utils.checkpoint`. For example, set to `{"use_reentrant": false}`.
 - report_to: Default is `tensorboard`.
 - remove_unused_columns: Default is False.
 - logging_first_step: Whether to log the first step print, default is True.
@@ -102,7 +103,6 @@ This parameter list inherits from transformers `Seq2SeqTrainingArguments`, with 
 Other important parameters:
 - 🔥num_train_epochs: Number of training epochs, default is 3.
 - 🔥gradient_accumulation_steps: Gradient accumulation, default is 1.
-- 🔥gradient_checkpointing_kwargs: Parameters passed to `torch.utils.checkpoint`. For example, set to `{"use_reentrant": false}`.
 - 🔥save_strategy: Strategy for saving the model, options are 'no', 'steps', 'epoch', default is 'steps'.
 - 🔥save_steps: Default is 500.
 - 🔥save_total_limit: Default is None, saving all checkpoints.
@@ -127,10 +127,10 @@ Other important parameters:
 - 🔥freeze_llm: Freeze LLM. Default is False. Applicable for full parameters and LoRA.
 - 🔥freeze_vit: Freeze ViT. Default is True. Applicable for full parameters and LoRA.
 - 🔥freeze_aligner: Freeze aligner. Default is True, applicable for full parameters and LoRA.
-- 🔥target_modules: Specify the LoRA module, default is `all-linear`, automatically finds linear layers except for lm_head and attaches the tuner. You can also specify `--target_modules all-linear all-embedding` to select the linear and embedding layers. This parameter is not limited to LoRA.
+- 🔥target_modules: The specified LoRA module defaults to `all-linear`. This behavior differs in LLM and multimodal LLM. If it is LLM, it will automatically search for linear except lm_head and attach tuner. If it is multimodal LLM, it defaults to attach tuner only on LLM, and this behavior can be controlled by `freeze_llm`, `freeze_vit`, `freeze_aligner`. This parameter is not limited to LoRA.
 - 🔥target_regex: Specify a regex expression for the LoRA module. Default is `None`, if this value is provided, target_modules does not take effect. This parameter is not limited to LoRA.
 - 🔥init_weights: The method of init tuner weights, For lora the accepted values are `true`, `false`, `guassian`, `pissa`, `pissa_niter_[number of iters]`, for bone are `true`, `false`, `bat`, default is `true`
-- modules_to_save: After the tuner is attached, the original model's modules used during training and storage, default is `[]`. You can specify `all-embedding` to select the embedding layers, and `all-norm` to select the layer normalization and RMS normalization layers. This parameter is not limited to LoRA.
+- modules_to_save: After the tuner is attached, the original model's modules used during training and storage, default is `[]`. This parameter is not limited to LoRA.
 
 #### Full Arguments
 

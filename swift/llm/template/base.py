@@ -145,15 +145,15 @@ class Template(ProcessorMixin):
                     images[i] = self._save_pil_image(image)
         inputs.images = images
 
-        if inputs.is_multimodal:
-            self._add_default_tags(inputs)
-
         self._get_std_messages(inputs.messages)
         n_round = len(inputs.messages) // 2
         if n_round > 1 and not self.template_meta.support_multi_round:
             logger.warning_once(
                 'The template does not support multi-round chat. Only use the last round of the conversation.')
             inputs.messages = inputs.messages[-2:]
+
+        if inputs.is_multimodal:
+            self._add_default_tags(inputs)
 
     def _rlhf_encode(self, inputs: StdTemplateInputs) -> Dict[str, Any]:
         chosen_inputs, rejected_inputs = inputs, deepcopy(inputs)
@@ -457,7 +457,7 @@ class Template(ProcessorMixin):
 
     @staticmethod
     def _add_default_tags(inputs: StdTemplateInputs):
-        total_content = '\n'.join([message['content'] for message in inputs.messages])
+        total_content = '\n'.join([message['content'] or '' for message in inputs.messages])
         for media_type in ['image', 'audio', 'video']:
             media_key, media_tag = f'{media_type}s', f'<{media_type}>'
             medias = getattr(inputs, media_key)
@@ -540,7 +540,7 @@ class Template(ProcessorMixin):
             res_context_list.append(bos_tokens)
             res_context_types.append(ContextType.OTHER)
 
-        prefix = template_meta.prefix if system is None else template_meta.system_prefix
+        prefix = template_meta.system_prefix if system else template_meta.prefix
         self._concat_context_list(prefix, res_context_list, res_context_types, system=system)
 
         n_round = len(inputs.messages) // 2
@@ -678,7 +678,7 @@ class Template(ProcessorMixin):
             k: v
             for k, v in kwargs.items() if k in {'input_ids', 'labels', 'attention_mask', 'position_ids'}
         }
-        keep_kwargs.update(self._post_encode(model, to_device(kwargs, model.device)))
+        keep_kwargs.update(to_device(self._post_encode(model, to_device(kwargs, model.device)), model.device))
         kwargs = keep_kwargs
         if 'inputs_embeds' in kwargs:
             kwargs.pop('input_ids', None)
@@ -755,10 +755,9 @@ class Template(ProcessorMixin):
     @staticmethod
     def fetch_inputs(batch: List[Dict[str, Any]], keys: Optional[List[str]] = None) -> Dict[str, Any]:
         from swift.llm import RowPreprocessor
+        keys = keys or []
         rows = RowPreprocessor.rows_to_batched(batch)
-        if keys is not None:
-            rows = {k: rows[k] for k in keys}
-        return rows
+        return {k: rows[k] for k in keys if rows.get(k) is not None}
 
     @staticmethod
     def gather_list(batch: List[Dict[str, Any]], attr_name: str) -> Optional[List[Any]]:
