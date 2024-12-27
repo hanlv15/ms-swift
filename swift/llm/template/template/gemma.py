@@ -32,8 +32,6 @@ class PaliGemmaTemplate(Template):
 
     def _encode(self, inputs: StdTemplateInputs) -> Dict[str, Any]:
         encoded = super()._encode(inputs)
-        if len(encoded) == 0:
-            return encoded
         raw_image = inputs.images
         processor = self.processor
         if encoded['labels'] is not None:
@@ -43,8 +41,8 @@ class PaliGemmaTemplate(Template):
         else:
             encoded['token_type_ids'] = [0] * len(encoded['input_ids'])
         if raw_image:
-            model_inputs = processor(text=inputs.to_history()['query'], images=raw_image[0], return_tensors='pt')
-            encoded['pixel_values'] = model_inputs['pixel_values']
+            model_inputs = processor(text='<image>' * len(raw_image), images=raw_image, return_tensors='pt')
+            encoded['pixel_values'] = model_inputs['pixel_values'].to(self.config.torch_dtype)
         return encoded
 
 

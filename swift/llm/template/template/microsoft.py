@@ -13,8 +13,8 @@ from ..utils import Context, Prompt, findall
 
 
 class FlorenceTemplate(Template):
-    # loss_scale = 'last_round'
-    # skip_prompt = False
+    # If it's an encoder-decoder architecture, the default settings are
+    # loss_scale: 'last_round' and skip_prompt: False.
     is_encoder_decoder = True
 
     @staticmethod
@@ -47,34 +47,36 @@ class FlorenceTemplate(Template):
                 break
         encoded = super()._encode(inputs)
         input_ids = encoded['prompt_input_ids']
-        if len(encoded) == 0:
-            return encoded
         images = inputs.images or []
         labels = encoded['labels']
         if labels is not None:
             labels = [0] + labels
-        pixel_values = processor.image_processor(
-            images, return_tensors='pt')['pixel_values'].to(self.config.torch_dtype)
-        encoded = {
-            'input_ids': input_ids,
-            'labels': labels,
-            'pixel_values': pixel_values,
-        }
+        if images:
+            pixel_values = processor.image_processor(
+                images, return_tensors='pt')['pixel_values'].to(self.config.torch_dtype)
+            encoded['pixel_values'] = pixel_values
+        encoded['input_ids'] = input_ids
+        encoded['labels'] = labels
         return encoded
 
     def _post_encode(self, model: nn.Module, inputs: Dict[str, Any]) -> Dict[str, Any]:
         inputs_embeds = model.get_input_embeddings()(inputs['input_ids'])
-        image_features = model._encode_image(inputs['pixel_values'])
-        inputs_embeds, _ = model._merge_input_ids_with_image_features(image_features, inputs_embeds)
+        pixel_values = inputs.get('pixel_values')
+        if pixel_values is not None:
+            image_features = model._encode_image(pixel_values)
+            inputs_embeds, inputs['attention_mask'] = model._merge_input_ids_with_image_features(
+                image_features, inputs_embeds)
         return {'inputs_embeds': inputs_embeds}
 
     def decode(self, generate_ids: List[int], **kwargs) -> Any:
         response = super().decode(generate_ids, **kwargs)
         template_inputs = kwargs.get('template_inputs')
         images = template_inputs.images
+        image_size = None
+        if images:
+            image_size = (images[0].width, images[0].height)
         return json.dumps(
-            self.processor.post_process_generation(
-                response, task=template_inputs.query, image_size=(images[0].width, images[0].height)))
+            self.processor.post_process_generation(response, task=template_inputs.query, image_size=image_size))
 
 
 register_template(
@@ -85,7 +87,7 @@ register_template(
         chat_sep=None,
         suffix=['</s>'],
         template_cls=FlorenceTemplate,
-        support_stream=False))
+    ))
 
 
 @dataclass
@@ -114,8 +116,6 @@ class Phi3VisionTemplate(Template):
     def _encode(self, inputs: StdTemplateInputs) -> Dict[str, Any]:
         images = inputs.images or []
         encoded = super()._encode(inputs)
-        if len(encoded) == 0:
-            return encoded
         input_ids = encoded['input_ids']
         labels = encoded['labels']
         idx_list = findall(input_ids, 32044)  # '<|image|>'

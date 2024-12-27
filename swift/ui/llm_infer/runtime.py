@@ -95,7 +95,7 @@ class Runtime(BaseUI):
         with gr.Accordion(elem_id='runtime_tab', open=False, visible=True):
             with gr.Blocks():
                 with gr.Row():
-                    gr.Dropdown(elem_id='running_tasks', scale=10)
+                    gr.Dropdown(elem_id='running_tasks', scale=10, allow_custom_value=True)
                     gr.Button(elem_id='refresh_tasks', scale=1, variant='primary')
                     gr.Button(elem_id='show_log', scale=1, variant='primary')
                     gr.Button(elem_id='stop_show_log', scale=1)
@@ -131,7 +131,7 @@ class Runtime(BaseUI):
         latest_data = ''
         lines = collections.deque(maxlen=int(os.environ.get('MAX_LOG_LINES', 50)))
         try:
-            with open(log_file, 'r') as input:
+            with open(log_file, 'r', encoding='utf-8') as input:
                 input.seek(offset)
                 fail_cnt = 0
                 while True:
@@ -268,7 +268,7 @@ class Runtime(BaseUI):
                 ret.append(gr.update())
         train_type = None
         if is_custom_path:
-            with open(os.path.join(all_args['ckpt_dir'], 'args.json'), 'r') as f:
+            with open(os.path.join(all_args['ckpt_dir'], 'args.json'), 'r', encoding='utf-8') as f:
                 _json = json.load(f)
                 train_type = _json.get('train_type')
         return ret + [gr.update(value=None), [all_args.get('model_type'), all_args.get('template_type'), train_type]]
