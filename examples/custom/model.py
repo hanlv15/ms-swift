@@ -53,19 +53,19 @@ register_template(
         prompt=['<extra_id_1>User\n{{QUERY}}\n<extra_id_1>Assistant\n'],
         chat_sep=['\n']))
 
-# register_template(
-#     TemplateMeta(
-#         template_type=CustomTemplateType.llama3,
-#         prefix=['<|begin_of_text|>'],
-#         prompt=[
-#         '<|start_header_id|>user<|end_header_id|>\n\n{{QUERY}}<|eot_id|>'
-#         '<|start_header_id|>assistant<|end_header_id|>\n\n'
-#     ],
-#         chat_sep=['<|eot_id|>'],
-#         suffix=['<|eot_id|>'],
-#         default_system=None,
-#         system_prefix=['<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{{SYSTEM}}<|eot_id|>']
-# ))
+register_template(
+    TemplateMeta(
+        template_type=CustomTemplateType.llama3,
+        prefix=['<|begin_of_text|>'],
+        prompt=[
+            '<|start_header_id|>user<|end_header_id|>\n\n{{QUERY}}<|eot_id|>'
+            '<|start_header_id|>assistant<|end_header_id|>\n\n'
+        ],
+        chat_sep=['<|eot_id|>'],
+        suffix=['<|eot_id|>'],
+        default_system=None,
+        system_prefix=['<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{{SYSTEM}}<|eot_id|>']
+))
 
 ################################
 
