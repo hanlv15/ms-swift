@@ -2,7 +2,7 @@
 import os
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional, Union
 
 import torch
 import torch.utils.checkpoint
@@ -10,6 +10,7 @@ from transformers.training_args import TrainingArguments as HfTrainingArguments
 from transformers.training_args_seq2seq import Seq2SeqTrainingArguments as HfSeq2SeqTrainingArguments
 
 from swift.utils import use_torchacc
+from .optimizers.galore import GaLoreConfig
 
 
 @dataclass
@@ -28,8 +29,11 @@ class SwiftArgumentsMixin:
     fsdp_num: int = 1
     acc_steps: int = 1
 
-    # Value copied from TrainArguments, Used for external tuners.
+    # Value copied from TrainArguments
     train_type: Optional[str] = None
+    optimizer: Optional[str] = None
+    local_repo_path: Optional[str] = None
+    galore_config: Optional[GaLoreConfig] = None
 
     def _fix_gradient_checkpointing(self):
         # fix use_reentrant
@@ -66,6 +70,43 @@ class SwiftArgumentsMixin:
 
 
 @dataclass
+class GRPOArgumentsMixin:
+    top_k: int = 50
+    top_p: float = 0.9
+    repetition_penalty: float = 1.
+    # vllm_device, vllm_gpu_memory_utilization, and vllm_max_model_len are defined in HfGRPOConfig.
+    num_infer_workers: int = 1
+    vllm_max_num_seqs: int = 256
+    vllm_enforce_eager: bool = False
+    vllm_limit_mm_per_prompt: Optional[Union[dict, str]] = None  # '{"image": 5, "video": 2}'
+    vllm_enable_prefix_caching: bool = True
+    # reward function args, see details in swift/plugin/orm.py
+    # cosine reward, https://arxiv.org/abs/2502.03373
+    cosine_min_len_value_wrong: float = 0.0  # r^w_0 in paper, Reward for wrong answers with zero completion length.
+    cosine_max_len_value_wrong: float = -0.5  # r^w_L in paper, Reward for wrong answers with max completion length.
+    cosine_min_len_value_correct: float = 1.0  # r^c_0 in paper, Reward for correct answers with zero completion length.
+    cosine_max_len_value_correct: float = 0.5  # r^c_L in paper, Reward for correct answers with max completion length.
+    cosine_max_len: Optional[int] = None  # Lmax in paper, default equal to max_completion_length
+    # repetition penalty, https://arxiv.org/abs/2502.03373
+    repetition_n_grams: int = 3
+    repetition_max_penalty: float = -1.0
+
+    # LMDeploy in GRPO
+    use_lmdeploy: bool = False
+    lmdeploy_device: Optional[str] = 'auto'
+    lmdeploy_session_len: Optional[int] = None
+    lmdeploy_cache_max_entry_count: float = 0.8
+
+    async_generate: bool = False
+    tensor_parallel_size: int = 1
+    sleep_level: int = 0
+    move_model_batches: Optional[int] = None
+    offload_optimizer: bool = False
+    offload_model: bool = False
+    gc_collect_after_offload: bool = False
+
+
+@dataclass
 class TrainingArguments(SwiftArgumentsMixin, HfTrainingArguments):
     pass
 
@@ -73,40 +114,3 @@ class TrainingArguments(SwiftArgumentsMixin, HfTrainingArguments):
 @dataclass
 class Seq2SeqTrainingArguments(SwiftArgumentsMixin, HfSeq2SeqTrainingArguments):
     pass
-
-
-try:
-    from trl import (DPOConfig as HfDPOConfig, CPOConfig as HfCPOConfig, ORPOConfig as HfORPOConfig, KTOConfig as
-                     HfKTOConfig, RewardConfig as HfRewardConfig, PPOv2Config as HfPPOConfig)
-
-    @dataclass
-    class DPOConfig(SwiftArgumentsMixin, HfDPOConfig):
-        pass
-
-    @dataclass
-    class CPOConfig(SwiftArgumentsMixin, HfCPOConfig):
-        pass
-
-    @dataclass
-    class ORPOConfig(SwiftArgumentsMixin, HfORPOConfig):
-        pass
-
-    @dataclass
-    class KTOConfig(SwiftArgumentsMixin, HfKTOConfig):
-        pass
-
-    @dataclass
-    class RewardConfig(SwiftArgumentsMixin, HfRewardConfig):
-        pass
-
-    @dataclass
-    class PPOConfig(SwiftArgumentsMixin, HfPPOConfig):
-        pass
-
-except (ImportError, RuntimeError):
-    DPOConfig = None
-    CPOConfig = None
-    ORPOConfig = None
-    KTOConfig = None
-    RewardConfig = None
-    PPOConfig = None

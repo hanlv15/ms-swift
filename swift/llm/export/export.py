@@ -17,12 +17,15 @@ class SwiftExport(SwiftPipeline):
 
     def run(self):
         args = self.args
-        assert len(args.adapters) <= 1, f'args.adapters: {args.adapters}'
         if args.to_peft_format:
             args.adapters[0] = swift_to_peft_format(args.adapters[0], args.output_dir)
-        elif args.merge_lora:
+        if args.merge_lora:
+            output_dir = args.output_dir
+            if args.to_peft_format or args.quant_method or args.to_ollama or args.push_to_hub:
+                args.output_dir = None
             merge_lora(args)
-        elif args.quant_method is not None:
+            args.output_dir = output_dir  # recover
+        if args.quant_method:
             quantize_model(args)
         elif args.to_ollama:
             export_to_ollama(args)

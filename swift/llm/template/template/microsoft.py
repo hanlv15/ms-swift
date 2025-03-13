@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
 import json
+import torch
 from torch import nn
 
 from ..base import Template
@@ -10,6 +11,7 @@ from ..constant import LLMTemplateType, MLLMTemplateType
 from ..register import TemplateMeta, register_template
 from ..template_inputs import StdTemplateInputs
 from ..utils import Context, Prompt, findall
+from ..vision_utils import load_file
 
 
 class FlorenceTemplate(Template):
@@ -25,17 +27,8 @@ class FlorenceTemplate(Template):
                     inputs: StdTemplateInputs) -> List[Context]:
         return []
 
-    def replace_box(self, object_: Dict[str, Any], index: int, inputs: StdTemplateInputs) -> List[Context]:
-        object_ = inputs.objects[index]
-        if isinstance(object_['bbox'][0], list):
-            all_objects = ''
-            for sub_object in object_['bbox']:
-                x1, y1, x2, y2 = sub_object
-                all_objects += f'<loc_{x1}><loc_{y1}><loc_{x2}><loc_{y2}>,'
-            return [all_objects[:-1]]
-        else:
-            x1, y1, x2, y2 = object_['bbox']
-            return [f'<loc_{x1}><loc_{y1}><loc_{x2}><loc_{y2}>']
+    def replace_bbox(self, bbox: List[int], index: int, inputs: StdTemplateInputs) -> List[Context]:
+        return [''.join(f'<loc_{box}>' for box in bbox)]
 
     def _encode(self, inputs: StdTemplateInputs) -> Dict[str, Any]:
         processor = self.processor
@@ -103,6 +96,21 @@ class Phi3TemplateMeta(TemplateMeta):
 register_template(Phi3TemplateMeta(LLMTemplateType.phi3))
 
 
+@dataclass
+class Phi4TemplateMeta(TemplateMeta):
+    prefix: Prompt = field(default_factory=list)
+    prompt: Prompt = field(
+        default_factory=lambda: ['<|im_start|>user<|im_sep|>{{QUERY}}<|im_end|><|im_start|>assistant<|im_sep|>'])
+    chat_sep: Optional[Prompt] = field(default_factory=lambda: ['<|im_end|>'])
+    suffix: Prompt = field(default_factory=lambda: ['<|im_end|>'])
+    system_prefix: Optional[Prompt] = field(
+        default_factory=lambda: ['<|im_start|>system<|im_sep|>{{SYSTEM}}<|im_end|>'])
+    auto_add_bos: bool = True
+
+
+register_template(Phi4TemplateMeta(LLMTemplateType.phi4))
+
+
 class Phi3VisionTemplate(Template):
     image_placeholder = ['<|image|><s>\n']  # <|image|>\n
 
@@ -144,4 +152,68 @@ class Phi3VisionTemplate(Template):
         return encoded
 
 
+class Phi4MMTemplate(Template):
+
+    def replace_tag(self, media_type: Literal['image', 'video', 'audio'], index: int,
+                    inputs: StdTemplateInputs) -> List[Context]:
+        if media_type == 'image':
+            return [[-100]]
+        elif media_type == 'audio':
+            import soundfile as sf
+            inputs.audios[index] = sf.read(load_file(inputs.audios[index]))
+            return [[-200]]
+
+    @staticmethod
+    def _split_list(inputs: List[int], x: int) -> List[List[int]]:
+        idxs = findall(inputs, x)  # '\n'
+        idxs.append(len(inputs))
+        res = []
+        lo = 0
+        for idx in idxs:
+            res.append(inputs[lo:idx])
+            lo = idx + 1
+        return res
+
+    def _encode(self, inputs: StdTemplateInputs) -> Dict[str, Any]:
+        encoded = super()._encode(inputs)
+        input_ids = encoded['input_ids']
+        labels = encoded['labels']
+        images_idx = findall(input_ids, -100)
+        audios_idx = findall(input_ids, -200)
+        text = '\n'.join(['<|image_1|>'] * len(inputs.images) + ['<|audio_1|>'] * len(inputs.audios))
+        new_encoded = self.processor(
+            text=text, images=inputs.images or None, audios=inputs.audios or None, return_tensors='pt')
+        placeholders = self._split_list(new_encoded.pop('input_ids')[0].tolist(), 198)
+        added_tokens_len = 0
+        for i, idx in enumerate(images_idx + audios_idx):
+            input_ids = input_ids[:idx + added_tokens_len] + placeholders[i] + input_ids[idx + added_tokens_len + 1:]
+            if labels is not None:
+                labels = labels[:idx + added_tokens_len] + [-100] * len(placeholders[i]) + labels[idx + added_tokens_len
+                                                                                                  + 1:]
+            added_tokens_len += len(placeholders[i]) - 1
+        new_encoded.pop('attention_mask')
+        encoded.update(new_encoded)
+        encoded['input_ids'] = input_ids
+        encoded['labels'] = labels
+        return encoded
+
+    def _data_collator(self, batch: List[Dict[str, Any]], *, padding_to: Optional[int] = None) -> Dict[str, Any]:
+        res = super()._data_collator(batch, padding_to=padding_to)
+        keys = [
+            'input_image_embeds', 'image_sizes', 'image_attention_mask', 'input_audio_embeds', 'audio_embed_sizes',
+            'input_mode'
+        ]
+        inputs = self.fetch_inputs(batch, keys)
+        for k, v in inputs.items():
+            inputs[k] = torch.concat(v)
+        res.update(inputs)
+        return res
+
+
 register_template(Phi3TemplateMeta(MLLMTemplateType.phi3_vision, template_cls=Phi3VisionTemplate))
+
+register_template(
+    Phi3TemplateMeta(
+        MLLMTemplateType.phi4_multimodal,
+        template_cls=Phi4MMTemplate,
+        placeholder_tokens=['<|endoftext10|>', '<|endoftext11|>']))

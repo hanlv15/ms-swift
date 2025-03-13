@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 import torch
 from PIL import Image
 
+from swift.utils import get_device
 from ..base import Template
 from ..constant import MLLMTemplateType
 from ..register import register_template
@@ -103,7 +104,7 @@ class Emu3GenTemplate(Template):
             UnbatchedClassifierFreeGuidanceLogitsProcessor(
                 self.CFG_SCALE,
                 model,
-                unconditional_ids=neg_inputs['input_ids'].to('cuda:0'),
+                unconditional_ids=neg_inputs['input_ids'].to(get_device()),
             ),
             PrefixConstrainedLogitsProcessor(
                 constrained_fn,
@@ -114,7 +115,7 @@ class Emu3GenTemplate(Template):
         res['logits_processor'] = logits_processor
         return res
 
-    def decode(self, generate_ids: List[int], is_finished: bool = True, **decode_kwargs) -> Any:
+    def decode(self, generate_ids: List[int], **kwargs) -> Any:
         mm_list = self.processor.decode(generate_ids)
         for im in mm_list:
             if not isinstance(im, Image.Image):

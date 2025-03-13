@@ -24,10 +24,13 @@ def get_template(
         *,
         use_chat_template: bool = True,
         template_backend: Literal['swift', 'jinja'] = 'swift',
-        truncation_strategy: Literal['raise', 'left'] = 'raise',
+        truncation_strategy: Literal['raise', 'left', 'right'] = 'raise',
         max_pixels: Optional[int] = None,  # h * w
         tools_prompt: str = 'react_en',
+        norm_bbox: Literal['norm1000', 'none', None] = None,
+        response_prefix: Optional[str] = None,
         # train
+        padding_side: Literal['left', 'right'] = 'right',
         loss_scale: str = 'default',
         sequence_parallel_size: int = 1) -> 'Template':
     template_meta = TEMPLATE_MAPPING[template_type]
@@ -40,10 +43,13 @@ def get_template(
         use_chat_template=use_chat_template,
         template_backend=template_backend,
         truncation_strategy=truncation_strategy,
-        loss_scale=loss_scale,
         max_pixels=max_pixels,
+        tools_prompt=tools_prompt,
+        norm_bbox=norm_bbox,
+        padding_side=padding_side,
+        loss_scale=loss_scale,
         sequence_parallel_size=sequence_parallel_size,
-        tools_prompt=tools_prompt)
+    )
 
 
 def get_template_meta(template_type: str) -> TemplateMeta:

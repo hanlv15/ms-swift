@@ -4,8 +4,12 @@ import re
 from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from ..preprocessor import (AlpacaPreprocessor, ClsPreprocessor, MessagesPreprocessor, ResponsePreprocessor,
-                            RowPreprocessor, TextGenerationPreprocessor)
+import json
+import numpy as np
+
+from ...template import split_str_parts_by
+from ..preprocessor import (AlpacaPreprocessor, ClsGenerationPreprocessor, ClsPreprocessor, MessagesPreprocessor,
+                            ResponsePreprocessor, RowPreprocessor, TextGenerationPreprocessor)
 from ..register import DatasetMeta, SubsetDataset, register_dataset
 
 
@@ -71,6 +75,22 @@ register_dataset(
         tags=['pretrain', '🔥']))
 
 
+class MathTrnPreprocessor(ResponsePreprocessor):
+
+    def preprocess(self, row):
+        query = row['query']
+        output = row['response']
+        row = {
+            'query': query,
+            'response': output,
+        }
+        return super().preprocess(row)
+
+
+register_dataset(
+    DatasetMeta(ms_dataset_id='AI-ModelScope/math-trn-format', preprocess_func=MathTrnPreprocessor(), tags=['math']))
+
+
 def _repair_ms_bench(messages: str) -> Optional[List[Dict[str, str]]]:
     if isinstance(messages, str):
         messages = ast.literal_eval(messages)
@@ -128,7 +148,7 @@ register_dataset(
         ms_dataset_id='lvjianjin/AdvertiseGen',
         hf_dataset_id='shibing624/AdvertiseGen',
         preprocess_func=TextGenerationPreprocessor(
-            prompt=advertise_gen_prompt, columns_mapping={
+            prompt=advertise_gen_prompt, columns={
                 'content': 'query',
                 'summary': 'response'
             }),
@@ -138,7 +158,6 @@ register_dataset(
 
 
 class FireflyPreprocessor(ResponsePreprocessor):
-
     _firefly_kind_list = {
         'ProseGeneration', 'MRC', 'JinYongGeneration', 'TextCorrection', 'ClassicalChinese', 'BELLE', 'StoryGeneration',
         'Couplet', 'Cot', 'Dictionary', 'Translation', 'Program', 'SentimentAnalyze', 'OpenQA', 'AncientPoem',
@@ -165,23 +184,12 @@ register_dataset(
         ms_dataset_id='modelscope/clue',
         hf_dataset_id='clue',
         subsets=['cmnli'],
-        preprocess_func=ClsPreprocessor(['neutral', 'entailment', 'contradiction'],
-                                        task='Natural Language Inference',
-                                        is_pair_seq=True),
+        preprocess_func=ClsGenerationPreprocessor(['neutral', 'entailment', 'contradiction'],
+                                                  task='Natural Language Inference',
+                                                  is_pair_seq=True),
         tags=['text-generation', 'classification'],
         split=['train', 'validation'],
     ))
-
-
-class JdClsPreprocessor(ClsPreprocessor):
-
-    def preprocess(self, row: Dict[str, Any]) -> Dict[str, Any]:
-        label = int(row['label'])
-        res = super().preprocess(row)
-        res['messages'].pop()
-        res['label'] = label
-        return res
-
 
 register_dataset(
     DatasetMeta(
@@ -190,15 +198,13 @@ register_dataset(
             SubsetDataset(
                 'default',
                 'default',
-                preprocess_func=ClsPreprocessor(['negative', 'positive'],
-                                                task='Sentiment Classification',
-                                                is_pair_seq=False)),
+                preprocess_func=ClsGenerationPreprocessor(['negative', 'positive'],
+                                                          task='Sentiment Classification',
+                                                          is_pair_seq=False)),
             SubsetDataset(
                 'cls',
                 'default',
-                preprocess_func=JdClsPreprocessor(['negative', 'positive'],
-                                                  task='Sentiment Classification',
-                                                  is_pair_seq=False),
+                preprocess_func=ClsPreprocessor(columns={'sentence': 'query'}),
             ),
         ],
         tags=['text-generation', 'classification', '🔥'],
@@ -260,7 +266,7 @@ register_dataset(
     DatasetMeta(
         ms_dataset_id='AI-ModelScope/sql-create-context',
         hf_dataset_id='b-mc2/sql-create-context',
-        preprocess_func=AlpacaPreprocessor(columns_mapping={
+        preprocess_func=AlpacaPreprocessor(columns={
             'question': 'instruction',
             'context': 'input',
             'answer': 'output'
@@ -293,7 +299,7 @@ register_dataset(
 register_dataset(
     DatasetMeta(
         ms_dataset_id='codefuse-ai/CodeExercise-Python-27k',
-        preprocess_func=MessagesPreprocessor(columns_mapping={'chat_rounds': 'messages'}),
+        preprocess_func=MessagesPreprocessor(columns={'chat_rounds': 'messages'}),
         tags=['chat', 'coding', '🔥']))
 
 
@@ -317,6 +323,22 @@ register_dataset(
         tags=['chat', 'coding', '🔥']))
 
 
+class StsbPreprocessor(ResponsePreprocessor):
+
+    def preprocess(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        row = {
+            'response': row['sentence1'],
+            'rejected_response': row['sentence2'],
+            'label': row['score'],
+        }
+        return super().preprocess(row)
+
+
+register_dataset(
+    DatasetMeta(
+        ms_dataset_id='sentence-transformers/stsb', preprocess_func=StsbPreprocessor(), tags=['similarity', '🔥']))
+
+
 def _repair_conversations_agent_instruct(s: str) -> List[Dict[str, Any]]:
     s = s.replace('}\n {', '},\n {')
     if isinstance(s, str):
@@ -336,8 +358,7 @@ class MultiRoleAgentPreprocessor(RowPreprocessor):
 
     def preprocess(self, row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         conv = row['conversations']
-        res_prompt = """\n\n【注意事项】\n1. 这是聊天室，不要发送私信给任何人\n2. 仅代表你个人说话,不要扮演其他人，
-        只根据对话历史进行回复\n3. 长话短说，不要说太多话，不要超过50字 """
+        res_prompt = '\n\n【注意事项】\n1. 这是聊天室，不要发送私信给任何人\n2. 仅代表你个人说话,不要扮演其他人，只根据对话历史进行回复\n3. 长话短说，不要说太多话，不要超过50字 '
         history_prompt = '\n\n【chat history】'
         conv_prompt = '\n {name}:{content}'
         query, response = '', conv[-1]['value']
@@ -374,6 +395,47 @@ register_dataset(
         tags=['chat', 'agent', 'multi-round', 'role-play', 'multi-agent']))
 
 register_dataset(DatasetMeta(ms_dataset_id='swift/ToolBench', tags=['chat', 'agent', 'multi-round']))
+
+register_dataset(
+    DatasetMeta(
+        ms_dataset_id='tastelikefeet/competition_math',
+        subsets=[
+            SubsetDataset(
+                name='default',
+                subset='default',
+                split=['train', 'test'],
+            ),
+        ],
+        tags=['qa', 'math']))
+
+register_dataset(DatasetMeta(ms_dataset_id='modelscope/gsm8k', subsets=['main'], split=['train'], tags=['qa', 'math']))
+
+register_dataset(
+    DatasetMeta(ms_dataset_id='modelscope/MathR', subsets=['default', 'clean'], split=['train'], tags=['qa', 'math']))
+
+register_dataset(
+    DatasetMeta(ms_dataset_id='modelscope/MathR-32B-Distill', subsets=['data'], split=['train'], tags=['qa', 'math']))
+
+
+class CoundownTaskPreprocessor(ResponsePreprocessor):
+
+    def preprocess(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        numbers = row['nums']
+        target = row.pop('response', None)
+        query = (f'Using the numbers {numbers}, create an equation that equals {target}.\n'
+                 'You can use basic arithmetic operations (+, -, *, /) and each number can only be used once.\n'
+                 'Show your work in <think> </think> tags. And return the final equation and answer '
+                 'in <answer> </answer> tags, for example <answer> (1 + 2) / 3 * 4 = 4 </answer>.')
+        row.update({'target': target, 'query': query})
+        return super().preprocess(row)
+
+
+register_dataset(
+    DatasetMeta(
+        ms_dataset_id='zouxuhong/Countdown-Tasks-3to4',
+        subsets=['default'],
+        preprocess_func=CoundownTaskPreprocessor(),
+        tags=['math']))
 
 
 class HC3Preprocessor(ResponsePreprocessor):
@@ -513,6 +575,29 @@ register_dataset(
         huge_dataset=True))
 
 
+class XlamFunctionCallingPreprocessor(ResponsePreprocessor):
+
+    def preprocess(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        query = row['query']
+        answers = row['response']
+        if isinstance(answers, str):
+            answers = json.loads(answers)
+        answer = np.random.choice(answers)
+        name = answer['name']
+        args = json.dumps(answer['arguments'])
+        response = f'Action: {name}\nAction Input: {args}'
+        row = {'query': query, 'response': response, 'solution': response, 'tools': row['tools']}
+        return super().preprocess(row)
+
+
+register_dataset(
+    DatasetMeta(
+        ms_dataset_id='LLM-Research/xlam-function-calling-60k',
+        subsets=['dataset'],
+        preprocess_func=XlamFunctionCallingPreprocessor(),
+        tags=['agent']))
+
+
 class HHRLHFCNPreprocessor(MessagesPreprocessor):
 
     def preprocess(self, row: Dict[str, Any]) -> Dict[str, Any]:
@@ -525,7 +610,7 @@ register_dataset(
     DatasetMeta(
         ms_dataset_id='AI-ModelScope/hh_rlhf_cn',
         subsets=['hh_rlhf', 'harmless_base_cn', 'harmless_base_en', 'helpful_base_cn', 'helpful_base_en'],
-        preprocess_func=HHRLHFCNPreprocessor(columns_mapping={'context': 'messages'}, content_key='text'),
+        preprocess_func=HHRLHFCNPreprocessor(columns={'context': 'messages'}, content_key='text'),
         split=['train', 'test'],
         tags=['rlhf', 'dpo', '🔥']))
 
@@ -550,20 +635,11 @@ register_dataset(
 register_dataset(
     DatasetMeta(
         ms_dataset_id='hjh0119/shareAI-Llama3-DPO-zh-en-emoji',
-        subsets=[
-            SubsetDataset(
-                'zh',
-                preprocess_func=ResponsePreprocessor(columns_mapping={
-                    'answer_zh': 'response',
-                    'answer_en': 'rejected_response'
-                })),
-            SubsetDataset(
-                'en',
-                preprocess_func=ResponsePreprocessor(columns_mapping={
-                    'answer_en': 'response',
-                    'answer_zh': 'rejected_response'
-                }))
-        ],
+        hf_dataset_id='shareAI/DPO-zh-en-emoji',
+        preprocess_func=ResponsePreprocessor(columns={
+            'answer_zh': 'response',
+            'answer_en': 'rejected_response'
+        }),
         tags=['rlhf', 'dpo']))
 
 register_dataset(
@@ -592,7 +668,6 @@ class GuanacoPreprocessor(RowPreprocessor):
         output = row['output']
         history = []
         if instruction:
-            from swift.llm.template import split_str_parts_by
             parts = split_str_parts_by(
                 instruction, ['User:', 'User：', 'Assistant：', 'Assistant:', 'Asssistent:', 'Assistent:', 'Assistenz:'])
             for idx, part in enumerate(parts):
@@ -671,7 +746,7 @@ register_dataset(
     DatasetMeta(
         ms_dataset_id='AI-ModelScope/orpo-dpo-mix-40k',
         hf_dataset_id='mlabonne/orpo-dpo-mix-40k',
-        preprocess_func=OrpoDPOMix40kPreprocessor(columns_mapping={
+        preprocess_func=OrpoDPOMix40kPreprocessor(columns={
             'chosen': 'messages',
             'rejected': 'rejected_messages'
         }),

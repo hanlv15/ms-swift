@@ -1,4 +1,5 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
+import os
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
@@ -20,6 +21,7 @@ class TemplateArguments:
         truncation_strategy (Literal): Strategy for truncating the template. Default is 'delete'.
         max_pixels (Optional[int]): Maximum number of pixels for the template. Default is None.
         tools_prompt (str): Override the default tools prompt in the template. Default is 'react_en'.
+        padding_side: The padding_side when the training batch_size >= 2
         loss_scale (str): Loss scale for training. Default is 'default',
             meaning only calculate the loss of the assistant.
         sequence_parallel_size (int): Size of sequence parallelism. Default is 1.
@@ -31,10 +33,13 @@ class TemplateArguments:
     system: Optional[str] = None  # Override the default_system in the template.
     max_length: Optional[int] = None
 
-    truncation_strategy: Literal['delete', 'left'] = 'delete'
+    truncation_strategy: Literal['delete', 'left', 'right'] = 'delete'
     max_pixels: Optional[int] = None
     tools_prompt: str = 'react_en'  # Override the default_tools_prompt in the template.
+    norm_bbox: Literal['norm1000', 'none', None] = None
+    response_prefix: Optional[str] = None
     # train
+    padding_side: Literal['left', 'right'] = 'right'
     loss_scale: str = 'default'
     sequence_parallel_size: int = 1
     # infer/deploy
@@ -44,9 +49,10 @@ class TemplateArguments:
     def __post_init__(self):
         if self.template is None and hasattr(self, 'model_meta'):
             self.template = self.model_meta.template
-
-        if self.max_length is None and hasattr(self, 'model_info'):
-            self.max_length = self.model_info.max_model_len
+        if self.system is not None and self.system.endswith('.txt'):
+            assert os.path.isfile(self.system), f'self.system: {self.system}'
+            with open(self.system, 'r') as f:
+                self.system = f.read()
 
     def get_template_kwargs(self):
         truncation_strategy = self.truncation_strategy
@@ -58,7 +64,10 @@ class TemplateArguments:
             'truncation_strategy': truncation_strategy,
             'max_pixels': self.max_pixels,
             'tools_prompt': self.tools_prompt,
+            'norm_bbox': self.norm_bbox,
+            'response_prefix': self.response_prefix,
             'loss_scale': self.loss_scale,
+            'padding_side': self.padding_side,
             'sequence_parallel_size': self.sequence_parallel_size,
             'template_backend': self.template_backend,
             'use_chat_template': self.use_chat_template

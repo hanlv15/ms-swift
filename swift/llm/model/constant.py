@@ -1,5 +1,6 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
 # Classification criteria for model_type: same model architecture, tokenizer (get function), template.
+from itertools import chain
 from typing import List
 
 
@@ -7,8 +8,12 @@ class LLMModelType:
     qwen = 'qwen'
     qwen2 = 'qwen2'
     qwen2_5 = 'qwen2_5'
+    qwen2_5_math = 'qwen2_5_math'
     qwen2_moe = 'qwen2_moe'
+    qwq_preview = 'qwq_preview'
     qwq = 'qwq'
+
+    qwen2_gte = 'qwen2_gte'
 
     codefuse_qwen = 'codefuse_qwen'
     modelscope_agent = 'modelscope_agent'
@@ -40,11 +45,14 @@ class LLMModelType:
 
     internlm = 'internlm'
     internlm2 = 'internlm2'
+    internlm3 = 'internlm3'
 
     deepseek = 'deepseek'
     deepseek_moe = 'deepseek_moe'
     deepseek_v2 = 'deepseek_v2'
     deepseek_v2_5 = 'deepseek_v2_5'
+    deepseek_r1 = 'deepseek_r1'
+    deepseek_r1_distill = 'deepseek_r1_distill'
 
     openbuddy_llama = 'openbuddy_llama'
     openbuddy_llama3 = 'openbuddy_llama3'
@@ -53,6 +61,7 @@ class LLMModelType:
 
     baichuan = 'baichuan'
     baichuan2 = 'baichuan2'
+    baichuan_m1 = 'baichuan_m1'
 
     minicpm = 'minicpm'
     minicpm_chatml = 'minicpm_chatml'
@@ -61,12 +70,12 @@ class LLMModelType:
 
     telechat = 'telechat'
     telechat2 = 'telechat2'
-    telechat2_115b = 'telechat2_115b'
 
     mistral = 'mistral'
     zephyr = 'zephyr'
     mixtral = 'mixtral'
     mistral_nemo = 'mistral_nemo'
+    mistral_2501 = 'mistral_2501'
     wizardlm2 = 'wizardlm2'
     wizardlm2_moe = 'wizardlm2_moe'
 
@@ -74,6 +83,9 @@ class LLMModelType:
     phi3_small = 'phi3_small'
     phi3 = 'phi3'
     phi3_moe = 'phi3_moe'
+    phi4 = 'phi4'
+
+    minimax = 'minimax'
 
     gemma = 'gemma'
     gemma2 = 'gemma2'
@@ -81,6 +93,7 @@ class LLMModelType:
     skywork = 'skywork'
     skywork_o1 = 'skywork_o1'
 
+    ling = 'ling'
     yuan2 = 'yuan2'
     orion = 'orion'
     xverse = 'xverse'
@@ -93,18 +106,34 @@ class LLMModelType:
     mamba = 'mamba'
     polylm = 'polylm'
     aya = 'aya'
+    moonlight = 'moonlight'
 
+
+class BertModelType:
     modern_bert = 'modern_bert'
+    modern_bert_gte = 'modern_bert_gte'
     bert = 'bert'
+
+
+class RMModelType:
+    internlm2_reward = 'internlm2_reward'
+    qwen2_reward = 'qwen2_reward'
+    qwen2_5_prm = 'qwen2_5_prm'
+    qwen2_5_math_reward = 'qwen2_5_math_reward'
+    llama3_2_reward = 'llama3_2_reward'
+    gemma_reward = 'gemma_reward'
 
 
 class MLLMModelType:
     qwen_vl = 'qwen_vl'
     qwen_audio = 'qwen_audio'
     qwen2_vl = 'qwen2_vl'
+    qwen2_5_vl = 'qwen2_5_vl'
     qwen2_audio = 'qwen2_audio'
     qvq = 'qvq'
     ovis1_6 = 'ovis1_6'
+    ovis1_6_llama3 = 'ovis1_6_llama3'
+    ovis2 = 'ovis2'
 
     glm4v = 'glm4v'
     glm_edge_v = 'glm_edge_v'
@@ -149,10 +178,14 @@ class MLLMModelType:
     deepseek_vl = 'deepseek_vl'
     deepseek_vl2 = 'deepseek_vl2'
     deepseek_janus = 'deepseek_janus'
+    deepseek_janus_pro = 'deepseek_janus_pro'
 
     minicpmv = 'minicpmv'
-    minicpmv2_6 = 'minicpmv2_6'
     minicpmv2_5 = 'minicpmv2_5'
+    minicpmv2_6 = 'minicpmv2_6'
+    minicpmo2_6 = 'minicpmo2_6'
+
+    minimax_vl = 'minimax_vl'
 
     mplug_owl2 = 'mplug_owl2'
     mplug_owl2_1 = 'mplug_owl2_1'
@@ -163,8 +196,11 @@ class MLLMModelType:
     emu3_gen = 'emu3_gen'
     emu3_chat = 'emu3_chat'
     got_ocr2 = 'got_ocr2'
+    got_ocr2_hf = 'got_ocr2_hf'
+    step_audio = 'step_audio'
 
     phi3_vision = 'phi3_vision'
+    phi4_multimodal = 'phi4_multimodal'
     florence = 'florence'
     idefics3 = 'idefics3'
     paligemma = 'paligemma'
@@ -172,9 +208,10 @@ class MLLMModelType:
     molmoe = 'molmoe'
     pixtral = 'pixtral'
     megrez_omni = 'megrez_omni'
+    valley = 'valley'
 
 
-class ModelType(LLMModelType, MLLMModelType):
+class ModelType(LLMModelType, MLLMModelType, BertModelType, RMModelType):
 
     @classmethod
     def get_model_name_list(cls) -> List[str]:
@@ -189,4 +226,7 @@ class ModelType(LLMModelType, MLLMModelType):
                     res.append(value)
             return res
 
-        return _get_model_name_list(LLMModelType) + _get_model_name_list(MLLMModelType)
+        return list(
+            chain.from_iterable(
+                _get_model_name_list(model_type_cls)
+                for model_type_cls in [LLMModelType, MLLMModelType, BertModelType, RMModelType]))

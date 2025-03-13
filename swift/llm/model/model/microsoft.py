@@ -6,13 +6,13 @@ from typing import Any, Dict
 from transformers import AutoConfig
 
 from swift.llm import TemplateType
-from swift.utils import get_env_args
+from swift.utils import get_device, get_env_args
 from ..constant import LLMModelType, MLLMModelType
 from ..model_arch import ModelArch
-from ..patcher import patch_output_clone
+from ..patcher import patch_ignore_check_imports, patch_output_clone
 from ..register import (Model, ModelGroup, ModelMeta, get_model_tokenizer_multimodal,
                         get_model_tokenizer_with_flash_attn, register_model)
-from ..utils import ModelInfo, ignore_check_imports, use_submodel_func
+from ..utils import ModelInfo, use_submodel_func
 
 
 def get_model_tokenizer_phi3_vision(model_dir: str,
@@ -46,9 +46,38 @@ register_model(
         TemplateType.phi3_vision,
         partial(get_model_tokenizer_phi3_vision, num_crops=4),
         architectures=['Phi3VForCausalLM'],
-        model_arch=ModelArch.phi3v,
+        model_arch=ModelArch.phi3_vision,
         requires=['transformers>=4.36'],
         tags=['vision'],
+    ))
+
+
+def get_model_tokenizer_phi4_multimodal(*args, **kwargs):
+    model, processor = get_model_tokenizer_multimodal(*args, **kwargs)
+    processor.audio_processor.audio_compression_rate = processor.audio_processor.compression_rate
+    processor.audio_processor.audio_downsample_rate = processor.audio_processor.qformer_compression_rate
+    processor.audio_processor.audio_feat_stride = processor.audio_processor.feat_stride
+    del processor.audio_processor.feature_size
+    del processor.audio_processor.sampling_rate
+    del processor.audio_processor.padding_value
+    del processor.__class__.chat_template
+    processor.chat_template = None
+    model.set_lora_adapter(['vision', 'speech'])
+    return model, processor
+
+
+register_model(
+    ModelMeta(
+        MLLMModelType.phi4_multimodal,
+        [ModelGroup([
+            Model('LLM-Research/Phi-4-multimodal-instruct', 'microsoft/Phi-4-multimodal-instruct'),
+        ])],
+        TemplateType.phi4_multimodal,
+        get_model_tokenizer_phi4_multimodal,
+        architectures=['Phi4MMForCausalLM'],
+        model_arch=ModelArch.phi4_multimodal,
+        requires=['transformers>=4.36,<4.49', 'backoff', 'soundfile'],
+        tags=['vision', 'audio'],
     ))
 
 
@@ -60,9 +89,9 @@ def get_model_tokenizer_florence(model_dir: str,
     model_config = AutoConfig.from_pretrained(model_dir, trust_remote_code=True)
     model_config.vision_config.model_type = 'davit'  # fix merge-lora
     if model_kwargs['device_map'] == 'auto':
-        model_kwargs['device_map'] = 'cuda:0'
+        model_kwargs['device_map'] = get_device()
     kwargs['model_config'] = model_config
-    with ignore_check_imports():
+    with patch_ignore_check_imports():
         model, processor = get_model_tokenizer_multimodal(model_dir, model_info, model_kwargs, load_model, **kwargs)
 
     if model is not None:
@@ -165,8 +194,24 @@ register_model(
                 Model('LLM-Research/Phi-3-medium-128k-instruct', 'microsoft/Phi-3-medium-128k-instruct'),
                 Model('LLM-Research/Phi-3.5-mini-instruct', 'microsoft/Phi-3.5-mini-instruct'),
             ]),
+            ModelGroup(Model('LLM-Research/Phi-4-mini-instruct', 'microsoft/Phi-4-mini-instruct'))
         ],
         TemplateType.phi3,
+        get_model_tokenizer_with_flash_attn,
+        architectures=['Phi3ForCausalLM'],
+        requires=['transformers>=4.36'],
+        model_arch=ModelArch.phi3,
+    ))
+
+register_model(
+    ModelMeta(
+        LLMModelType.phi4,
+        [
+            ModelGroup([
+                Model('LLM-Research/phi-4', 'microsoft/phi-4'),
+            ]),
+        ],
+        TemplateType.phi4,
         get_model_tokenizer_with_flash_attn,
         architectures=['Phi3ForCausalLM'],
         requires=['transformers>=4.36'],

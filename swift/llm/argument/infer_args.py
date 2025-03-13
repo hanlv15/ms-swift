@@ -4,9 +4,10 @@ import os
 from dataclasses import dataclass
 from typing import Literal, Optional, Union
 
+import torch
 import torch.distributed as dist
+from transformers.utils import is_torch_npu_available
 
-from swift.llm import get_template_meta
 from swift.utils import get_logger, is_dist
 from .base_args import BaseArguments, to_abspath
 from .base_args.model_args import ModelArguments
@@ -36,13 +37,16 @@ class LmdeployArguments:
     vision_batch_size: int = 1  # max_batch_size in VisionConfig
 
     def get_lmdeploy_engine_kwargs(self):
-        return {
+        kwargs = {
             'tp': self.tp,
             'session_len': self.session_len,
             'cache_max_entry_count': self.cache_max_entry_count,
             'quant_policy': self.quant_policy,
             'vision_batch_size': self.vision_batch_size
         }
+        if dist.is_initialized():
+            kwargs.update({'devices': [dist.get_rank()]})
+        return kwargs
 
 
 @dataclass
@@ -60,6 +64,7 @@ class VllmArguments:
         enforce_eager (bool): Flag to enforce eager execution. Default is False.
         limit_mm_per_prompt (Optional[str]): Limit multimedia per prompt. Default is None.
         vllm_max_lora_rank (int): Maximum LoRA rank. Default is 16.
+        enable_prefix_caching (bool): Flag to enable automatic prefix caching. Default is False.
     """
     # vllm
     gpu_memory_utilization: float = 0.9
@@ -69,8 +74,9 @@ class VllmArguments:
     max_model_len: Optional[int] = None
     disable_custom_all_reduce: bool = False
     enforce_eager: bool = False
-    limit_mm_per_prompt: Optional[Union[dict, str]] = None  # '{"image": 10, "video": 5}'
+    limit_mm_per_prompt: Optional[Union[dict, str]] = None  # '{"image": 5, "video": 2}'
     vllm_max_lora_rank: int = 16
+    enable_prefix_caching: bool = False
 
     def __post_init__(self):
         self.limit_mm_per_prompt = ModelArguments.parse_to_dict(self.limit_mm_per_prompt)
@@ -79,7 +85,7 @@ class VllmArguments:
         adapters = self.adapters
         if hasattr(self, 'adapter_mapping'):
             adapters = adapters + list(self.adapter_mapping.values())
-        return {
+        kwargs = {
             'gpu_memory_utilization': self.gpu_memory_utilization,
             'tensor_parallel_size': self.tensor_parallel_size,
             'pipeline_parallel_size': self.pipeline_parallel_size,
@@ -91,7 +97,11 @@ class VllmArguments:
             'max_lora_rank': self.vllm_max_lora_rank,
             'enable_lora': len(adapters) > 0,
             'max_loras': max(len(adapters), 1),
+            'enable_prefix_caching': self.enable_prefix_caching,
         }
+        if dist.is_initialized():
+            kwargs.update({'device': dist.get_rank()})
+        return kwargs
 
 
 @dataclass
@@ -111,9 +121,10 @@ class InferArguments(MergeArguments, VllmArguments, LmdeployArguments, BaseArgum
     infer_backend: Literal['vllm', 'pt', 'lmdeploy'] = 'pt'
 
     result_path: Optional[str] = None
-    writer_buffer_size: int = 65536
+    metric: Literal['acc', 'rouge'] = None
     # for pt engine
     max_batch_size: int = 1
+    ddp_backend: Optional[str] = None
 
     # only for inference
     val_dataset_sample: Optional[int] = None
@@ -128,6 +139,7 @@ class InferArguments(MergeArguments, VllmArguments, LmdeployArguments, BaseArgum
 
     def _init_result_path(self, folder_name: str) -> None:
         if self.result_path is not None:
+            self.result_path = to_abspath(self.result_path)
             return
         self.result_path = self._get_result_path(folder_name)
         logger.info(f'args.result_path: {self.result_path}')
@@ -139,22 +151,28 @@ class InferArguments(MergeArguments, VllmArguments, LmdeployArguments, BaseArgum
             self.stream = False
             logger.info('Setting args.stream: False')
 
-    def _init_pt_ddp(self):
-        if self.infer_backend != 'pt' or not is_dist():
+    def _init_ddp(self):
+        if not is_dist():
             return
         assert not self.eval_human and not self.stream
         self._init_device()
         if not dist.is_initialized():
-            dist.init_process_group(backend='nccl')
+            if self.ddp_backend is None:
+                if is_torch_npu_available():
+                    self.ddp_backend = 'hccl'
+                elif torch.cuda.is_available():
+                    self.ddp_backend = 'nccl'
+                else:
+                    self.ddp_backend = 'gloo'
+            dist.init_process_group(backend=self.ddp_backend)
 
     def __post_init__(self) -> None:
         BaseArguments.__post_init__(self)
-        MergeArguments.__post_init__(self)
         VllmArguments.__post_init__(self)
         self._init_result_path('infer_result')
         self._init_eval_human()
         self._init_stream()
-        self._init_pt_ddp()
+        self._init_ddp()
 
     def _init_eval_human(self):
         if len(self.dataset) == 0 and len(self.val_dataset) == 0:

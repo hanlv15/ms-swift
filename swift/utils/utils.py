@@ -1,5 +1,6 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
 import datetime as dt
+import importlib
 import os
 import random
 import re
@@ -235,7 +236,7 @@ def find_free_port(start_port: Optional[int] = None, retry: int = 100) -> int:
     for port in range(start_port, start_port + retry):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             try:
-                sock.bind(('', start_port))
+                sock.bind(('', port))
                 port = sock.getsockname()[1]
                 break
             except OSError:
@@ -266,3 +267,12 @@ def patch_getattr(obj_cls, item_name: str):
 
     obj_cls.__getattr__ = __new_getattr__
     obj_cls._patch = True
+
+
+def import_external_file(file_path: str):
+    file_path = os.path.abspath(os.path.expanduser(file_path))
+    py_dir, py_file = os.path.split(file_path)
+    sys.path.append(py_dir)
+    assert os.path.isdir(py_dir), f'py_dir: {py_dir}'
+    sys.path.insert(0, py_dir)
+    return importlib.import_module(py_file.split('.', 1)[0])

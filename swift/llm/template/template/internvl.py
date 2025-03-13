@@ -11,7 +11,7 @@ from ..constant import MLLMTemplateType
 from ..register import register_template
 from ..template_inputs import StdTemplateInputs
 from ..utils import Context, findall
-from ..vision_utils import load_video_internvl, replace_video2image, transform_image
+from ..vision_utils import load_video_internvl, transform_image
 from .microsoft import Phi3TemplateMeta
 from .utils import ChatmlTemplateMeta
 
@@ -23,7 +23,7 @@ class InternvlTemplate(Template):
     def replace_tag(self, media_type: Literal['image', 'video', 'audio'], index: int,
                     inputs: StdTemplateInputs) -> List[Context]:
         if self.mode == 'vllm':
-            image_context = ['<img><image></img>\n']
+            image_context = ['<image>\n']
         else:
             image_context = ['<img>', [-100], '</img>\n']
         return image_context
@@ -98,34 +98,13 @@ class Internvl2Template(InternvlTemplate):
         elif media_type == 'video':
             video_segments = get_env_args('video_segments', int, self.video_segments)
             load_video = partial(load_video_internvl, num_segments=video_segments)
-            return replace_video2image(load_video, inputs, lambda i: [f'Frame{i + 1}: '] + image_context)
+            return self.replace_video2image(load_video, inputs, lambda i: [f'Frame{i + 1}: '] + image_context)
 
-    def replace_object(self, object_: Dict[str, Any], index: int, inputs: StdTemplateInputs) -> List[Context]:
-        objects = inputs.objects
-        if objects:
-            object_ = objects[index]
-            return [f'<ref>{object_["caption"]}</ref>']
-        else:
-            return ['<ref-object>']
+    def replace_ref(self, ref: str, index: int, inputs: StdTemplateInputs) -> List[Context]:
+        return [f'<ref>{ref}</ref>']
 
-    def replace_box(self, object_: Dict[str, Any], index: int, inputs: StdTemplateInputs) -> List[Context]:
-        objects = inputs.objects
-        if objects:
-            object_ = objects[index]
-            if isinstance(object_['bbox'][0], list):
-                all_objects = '<box> ['
-                for sub_object in object_['bbox']:
-                    all_objects += (f'[{sub_object[0]}, {sub_object[1]}, ' f'{sub_object[2]}, {sub_object[3]}],')
-                all_objects = all_objects[:-1]
-                all_objects += '] </box>'
-                return [all_objects]
-            else:
-                return [
-                    f'<box> [[{object_["bbox"][0]}, {object_["bbox"][1]}, '
-                    f'{object_["bbox"][2]}, {object_["bbox"][3]}]] </box>'
-                ]
-        else:
-            return ['<bbox>']
+    def replace_bbox(self, bbox: List[int], index: int, inputs: StdTemplateInputs) -> List[Context]:
+        return [f'<box>[{bbox}]</box>']
 
     def _encode(self, inputs: StdTemplateInputs) -> Dict[str, Any]:
         encoded = super(InternvlTemplate, self)._encode(inputs)
@@ -136,7 +115,10 @@ class Internvl2Template(InternvlTemplate):
         if images:
             has_video = bool(inputs.videos)
             input_size = get_env_args('input_size', int, 448)
-            max_num = get_env_args('max_num', int, 1 if has_video else 12)
+            max_num = get_env_args('max_num', int, 12)
+            video_max_num = get_env_args('video_max_num', int, 1)
+            if has_video:
+                max_num = video_max_num
             pixel_values = [transform_image(image, input_size, max_num) for image in images]
             num_patches = [pv.shape[0] for pv in pixel_values]
             pixel_values = torch.cat(pixel_values).to(self.config.torch_dtype)
@@ -159,8 +141,6 @@ class Internvl2Template(InternvlTemplate):
         encoded['pixel_values'] = pixel_values
         return encoded
 
-
-# TODO: self.padding_side = 'left'
 
 _internvl2_system = '你是由上海人工智能实验室联合商汤科技开发的书生多模态大模型，英文名叫InternVL, 是一个有用无害的人工智能助手。'
 register_template(

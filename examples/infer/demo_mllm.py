@@ -19,11 +19,13 @@ def infer_batch(engine: 'InferEngine', infer_requests: List['InferRequest']):
 def infer_stream(engine: 'InferEngine', infer_request: 'InferRequest'):
     request_config = RequestConfig(max_tokens=512, temperature=0, stream=True)
     metric = InferStats()
-    gen = engine.infer([infer_request], request_config, metrics=[metric])
+    gen_list = engine.infer([infer_request], request_config, metrics=[metric])
     query = infer_request.messages[0]['content']
     print(f'query: {query}\nresponse: ', end='')
-    for resp_list in gen:
-        print(resp_list[0].choices[0].delta.content, end='', flush=True)
+    for resp in gen_list[0]:
+        if resp is None:
+            continue
+        print(resp.choices[0].delta.content, end='', flush=True)
     print()
     print(f'metric: {metric.compute()}')
 
@@ -104,22 +106,36 @@ if __name__ == '__main__':
     if infer_backend == 'pt':
         model = 'Qwen/Qwen2-Audio-7B-Instruct'
         mm_type = 'audio'
-        dataset = 'speech_asr/speech_asr_aishell1_trainsets:validation#1000'
         engine = PtEngine(model, max_batch_size=64)
     elif infer_backend == 'vllm':
+        # test env: vllm==0.7.3, transformers==4.49.*
+        # The meaning of environment variables can be found at:
+        # https://swift.readthedocs.io/zh-cn/latest/Instruction/%E5%91%BD%E4%BB%A4%E8%A1%8C%E5%8F%82%E6%95%B0.html#id17
         from swift.llm import VllmEngine
-        model = 'Qwen/Qwen2-VL-2B-Instruct'
-        mm_type = 'video'
-        dataset = 'AI-ModelScope/LaTeX_OCR:small#1000'
-        engine = VllmEngine(model, max_model_len=32768, limit_mm_per_prompt={'image': 5, 'video': 2})
+        os.environ['MAX_PIXELS'] = '1003520'
+        os.environ['VIDEO_MAX_PIXELS'] = '50176'
+        os.environ['FPS_MAX_FRAMES'] = '12'
+        model = 'Qwen/Qwen2.5-VL-3B-Instruct'
+        # If you encounter insufficient GPU memory, please reduce `max_model_len` and set `max_num_seqs=5`.
+        engine = VllmEngine(model, max_model_len=8192, limit_mm_per_prompt={'image': 5, 'video': 2})
+        mm_type = 'image'  # or 'video'
     elif infer_backend == 'lmdeploy':
+        # test env: lmdeploy==0.7.1
         from swift.llm import LmdeployEngine
         model = 'OpenGVLab/InternVL2_5-1B'
-        mm_type = 'video'
-        dataset = 'AI-ModelScope/LaTeX_OCR:small#1000'
         engine = LmdeployEngine(model, vision_batch_size=8)
+        mm_type = 'image'  # or 'video'
 
-    dataset = load_dataset([dataset], strict=False, seed=42)[0]
+    # infer dataset
+    if mm_type == 'audio':
+        dataset = 'speech_asr/speech_asr_aishell1_trainsets:validation#1000'
+    elif mm_type == 'image':
+        dataset = 'AI-ModelScope/LaTeX_OCR:small#1000'
+    elif mm_type == 'video':
+        dataset = 'swift/VideoChatGPT:Generic#100'
+
+    # Here, `load_dataset` is used for convenience; `infer_batch` does not require creating a dataset.
+    dataset = load_dataset([dataset], seed=42)[0]
     print(f'dataset: {dataset}')
     infer_requests = [InferRequest(**data) for data in dataset]
     infer_batch(engine, infer_requests)

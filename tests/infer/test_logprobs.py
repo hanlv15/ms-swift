@@ -19,7 +19,7 @@ def _prepare(infer_backend: Literal['vllm', 'pt', 'lmdeploy']):
     elif infer_backend == 'vllm':
         from swift.llm import VllmEngine
         engine = VllmEngine('Qwen/Qwen2-7B-Instruct')
-    template = get_template(engine.model.model_meta.template, engine.tokenizer)
+    template = get_template(engine.model_meta.template, engine.tokenizer)
     infer_requests = [
         InferRequest([{
             'role': 'user',
@@ -55,10 +55,9 @@ def test_stream(engine, template, infer_requests):
     infer_stats = InferStats()
     request_config = RequestConfig(temperature=0, stream=True, logprobs=True, top_logprobs=2)
 
-    gen = engine.infer(infer_requests, template=template, request_config=request_config, metrics=[infer_stats])
+    gen_list = engine.infer(infer_requests, template=template, request_config=request_config, metrics=[infer_stats])
 
-    for response_list in gen:
-        response = response_list[0]
+    for response in gen_list[0]:
         if response is None:
             continue
         print(response.choices[0].delta.content, end='', flush=True)

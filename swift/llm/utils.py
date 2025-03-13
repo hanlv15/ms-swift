@@ -2,11 +2,13 @@
 import inspect
 import os
 import shutil
+import tempfile
 from types import MethodType
 from typing import Any, Dict, List, Mapping, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+from modelscope.hub.utils.utils import get_cache_dir
 from transformers import FeatureExtractionMixin, GenerationConfig, PreTrainedModel, PreTrainedTokenizerBase
 from transformers import ProcessorMixin as HfProcessorMixin
 
@@ -18,11 +20,15 @@ try:
 except ImportError:
     Processor = Union[PreTrainedTokenizerBase, FeatureExtractionMixin, HfProcessorMixin]
 
+if 'TOKENIZERS_PARALLELISM' not in os.environ:
+    os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
 logger = get_logger()
 
+Tool = Dict[str, Union[str, Dict]]
 History = List[Union[Tuple[str, str], List[str]]]
-
-os.environ['TOKENIZERS_PARALLELISM'] = 'true'
+Message = Dict[str, Union[str, List[Dict[str, Any]]]]
+Messages = List[Message]
 
 
 class ProcessorMixin:
@@ -42,7 +48,19 @@ class ProcessorMixin:
             raise AttributeError('Please use `self.processor` for assignment.')
 
 
-def to_device(data: Any, device: torch.device) -> Any:
+def to_float_dtype(data: Any, dtype: torch.dtype) -> Any:
+    """Change the float inputs to a dtype"""
+    if isinstance(data, Mapping):
+        return type(data)({k: to_float_dtype(v, dtype) for k, v in data.items()})
+    elif isinstance(data, (tuple, list)):
+        return type(data)(to_float_dtype(v, dtype) for v in data)
+    elif isinstance(data, torch.Tensor) and torch.is_floating_point(data):
+        return data.to(dtype=dtype)
+    else:
+        return data
+
+
+def to_device(data: Any, device: Union[str, torch.device, int]) -> Any:
     """Move inputs to a device"""
     if isinstance(data, Mapping):
         return type(data)({k: to_device(v, device) for k, v in data.items()})
@@ -70,9 +88,10 @@ def set_generation_config(model: nn.Module, generation_config: GenerationConfig)
 def find_module_list(model) -> Optional[nn.ModuleList]:
     module_lists = []
     for m in model.modules():
-        if hasattr(m, 'gradient_checkpointing'):
+        if hasattr(m, 'gradient_checkpointing') or m.__class__.__name__ == 'CheckpointWrapper':
             return
-        if isinstance(m, nn.ModuleList) and len(m) >= 10:
+        if (isinstance(m, (nn.ModuleList, nn.Sequential)) and len(m) >= 10
+                and 'mlp' not in m[0].__class__.__name__.lower()):  # fix moe
             module_lists.append(m)
     if module_lists:
         return max(module_lists, key=lambda x: len(x))
@@ -126,7 +145,7 @@ def dynamic_gradient_checkpointing(model) -> None:
     from .model import ModelMeta, get_model_arch
     model_meta: ModelMeta = model.model_meta
     model_arch = get_model_arch(model_meta.model_arch)
-    if model_meta.is_multimodal:
+    if model_meta.is_multimodal and model_arch:
         tower_names = model_arch.language_model + model_arch.vision_tower
     else:
         tower_names = [None]
@@ -222,3 +241,40 @@ def save_checkpoint(model: Optional[PreTrainedModel],
             elif os.path.isdir(src_path):
                 shutil.copytree(src_path, tgt_path)
                 break
+
+
+TEMP_DIR_POOL = {}
+
+
+def get_temporary_cache_files_directory(prefix=None):
+    if prefix is None:
+        import datasets.config
+        prefix = datasets.config.TEMP_CACHE_DIR_PREFIX
+    global TEMP_DIR_POOL
+    if prefix in TEMP_DIR_POOL:
+        TEMP_DIR = TEMP_DIR_POOL[prefix]
+    else:
+        tmp_dir = os.path.join(get_cache_dir(), 'tmp')
+        os.makedirs(tmp_dir, exist_ok=True)
+        kwargs = {}
+        parameters = inspect.signature(tempfile.TemporaryDirectory.__init__).parameters
+        if 'ignore_cleanup_errors' in parameters:
+            kwargs['ignore_cleanup_errors'] = True
+        TEMP_DIR = tempfile.TemporaryDirectory(prefix=prefix, dir=tmp_dir, **kwargs)
+        logger.info(f'create tmp_dir: {TEMP_DIR.name}')
+        TEMP_DIR_POOL[prefix] = TEMP_DIR
+
+    return TEMP_DIR.name
+
+
+def get_ckpt_dir(model_dir: str, adapters_dir: Optional[List[str]]) -> str:
+    model_dirs = (adapters_dir or []).copy()
+    if model_dir:
+        model_dirs.append(model_dir)
+    # The adapter takes higher priority.
+    ckpt_dir = None
+    for model_dir in model_dirs:
+        if os.path.exists(os.path.join(model_dir, 'args.json')):
+            ckpt_dir = model_dir
+            break
+    return ckpt_dir

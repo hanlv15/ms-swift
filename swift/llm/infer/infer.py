@@ -1,14 +1,14 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
 from contextlib import nullcontext
-from itertools import chain
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 import numpy as np
 import torch.distributed as dist
 from datasets import Dataset as HfDataset
 
 from swift.llm import InferArguments, InferRequest, SwiftPipeline, load_dataset, prepare_model_template, sample_dataset
-from swift.utils import get_logger, is_master, open_jsonl_writer
+from swift.plugin import InferStats, MeanMetric, compute_rouge_bleu
+from swift.utils import JsonlWriter, get_logger, is_master, read_from_jsonl
 from .infer_engine import AdapterRequest, PtEngine
 from .protocol import RequestConfig
 from .utils import InferCliState
@@ -24,7 +24,6 @@ class SwiftInfer(SwiftPipeline):
         from swift.llm import merge_lora
         super().__init__(args)
         args = self.args
-        assert len(args.adapters) <= 1, f'args.adapters: {args.adapters}'
         if args.merge_lora:
             merge_lora(args, device_map='cpu')
         self.infer_kwargs = {}
@@ -71,19 +70,11 @@ class SwiftInfer(SwiftPipeline):
             from .infer_engine import LmdeployEngine
             infer_engine_cls = LmdeployEngine
             kwargs.update(args.get_lmdeploy_engine_kwargs())
-
         return infer_engine_cls(**kwargs)
-
-    def main(self):
-        args = self.args
-        context = open_jsonl_writer(
-            args.result_path, buffer_size=args.writer_buffer_size) if args.result_path else nullcontext()
-        with context as json_writer:
-            self.jsonl_writer = json_writer
-            return super().main()
 
     def run(self) -> List[Dict[str, Any]]:
         args = self.args
+        self.jsonl_writer = JsonlWriter(args.result_path) if args.result_path else None
         if args.eval_human:
             result = self.infer_cli()
         else:
@@ -97,16 +88,16 @@ class SwiftInfer(SwiftPipeline):
                                 request_config,
                                 template=self.template,
                                 use_tqdm=False,
-                                **self.infer_kwargs)
+                                **self.infer_kwargs)[0]
         if request_config and request_config.stream:
             response = ''
             for res in res_or_gen:
-                delta = res[0].choices[0].delta.content
+                delta = res.choices[0].delta.content
                 print(delta, end='', flush=True)
                 response += delta
             print()
         else:
-            response = res_or_gen[0].choices[0].message.content
+            response = res_or_gen.choices[0].message.content
             print(response)
         print('-' * 50)
         return response
@@ -140,10 +131,19 @@ class SwiftInfer(SwiftPipeline):
             infer_state.add_query(query)
             if args.model_meta.is_multimodal:
                 infer_state.input_mm_data()
-            data = infer_state.to_dict()
-            response = self.infer_single(data, request_config)
-            infer_state.add_response(response)
-            data = {'response': response, **data}
+            if args.task_type == 'seq_cls' and args.num_labels == 1:
+                # reward model
+                response = infer_state.input_text()
+                infer_state.add_response(response)
+                data = infer_state.to_dict()
+                response = self.infer_single(data, request_config)
+                data = {'response': response, **data}
+            else:
+                data = infer_state.to_dict()
+                response = self.infer_single(data, request_config)
+                infer_state.add_response(response)
+                data['messages'].append({'role': 'assistant', 'content': response})
+                data = {'response': response, **data}
             result_list.append(data)
             if self.jsonl_writer:
                 self.jsonl_writer.append(data)
@@ -161,6 +161,24 @@ class SwiftInfer(SwiftPipeline):
         val_dataset = sample_dataset(val_dataset, args.val_dataset_sample, self.random_state)
         return val_dataset
 
+    def _calc_metric(self):
+        args = self.args
+        if not is_master():
+            return
+        data_list = read_from_jsonl(self.jsonl_writer.fpath)
+        preds, labels = [], []
+        for data in data_list:
+            preds.append(data['response'])
+            labels.append(data['labels'])
+        if args.metric == 'acc':
+            mean_metric = MeanMetric()
+            for pred, label in zip(preds, labels):
+                mean_metric.update(pred == label)
+            res = {'acc': mean_metric.compute()['value']}
+        elif args.metric == 'rouge':
+            res = compute_rouge_bleu(preds, labels)
+        logger.info(res)
+
     def infer_dataset(self) -> List[Dict[str, Any]]:
         args = self.args
         request_config = args.get_request_config()
@@ -169,6 +187,7 @@ class SwiftInfer(SwiftPipeline):
         val_dataset = self._prepare_val_dataset()
         logger.info(f'val_dataset: {val_dataset}')
         result_list = []
+        self.infer_kwargs['metrics'] = [InferStats()]
         if request_config and request_config.stream:
             for data in val_dataset:
                 labels = InferRequest.remove_response(data['messages'])
@@ -178,32 +197,38 @@ class SwiftInfer(SwiftPipeline):
                     print(f'[LABELS] {labels}')
                 print('[RESPONSE] ', end='')
                 response = self.infer_single(data, request_config)
+                data['messages'].append({'role': 'assistant', 'content': response})
                 data = {'response': response, 'labels': labels, **data}
                 result_list.append(data)
                 if self.jsonl_writer:
                     self.jsonl_writer.append(data)
         else:
-            is_dist = args.world_size > 1 and dist.is_initialized()
-            if is_dist:
-                val_dataset = val_dataset.shard(args.world_size, args.rank, contiguous=True)
+            if args.rank >= 0 and args.global_world_size > 1:
+                val_dataset = val_dataset.shard(args.global_world_size, args.rank, contiguous=True)
             val_dataset = list(val_dataset)
-            labels_list = [InferRequest.remove_response(data['messages']) for data in val_dataset]
+            labels_list = []
+            for data in val_dataset:
+                if args.task_type == 'causal_lm':
+                    labels = InferRequest.remove_response(data['messages'])
+                else:
+                    labels = data.pop('label', None)
+                    if labels is not None:
+                        labels = str(int(labels))
+                labels_list.append(labels)
 
             resp_list = self.infer(
                 val_dataset, request_config, template=self.template, use_tqdm=True, **self.infer_kwargs)
             for data, resp, labels in zip(val_dataset, resp_list, labels_list):
                 response = resp.choices[0].message.content
-                if labels:
-                    data['labels'] = labels
-                data = {'response': response, 'logprobs': resp.choices[0].logprobs, **data}
+                data['messages'].append({'role': 'assistant', 'content': response})
+                data = {'response': response, 'labels': labels, 'logprobs': resp.choices[0].logprobs, **data}
                 result_list.append(data)
-            if is_dist:
-                total_result_list = [None for _ in range(args.world_size)] if args.rank == 0 else None
-                dist.gather_object(result_list, total_result_list)
-                result_list = total_result_list and list(chain.from_iterable(total_result_list))
-
-            if is_master() and self.jsonl_writer and result_list:
-                self.jsonl_writer.append(result_list)
+            if self.jsonl_writer:
+                self.jsonl_writer.append(result_list, gather_obj=True)
+        metrics = self.infer_kwargs.pop('metrics')
+        print(f'[rank{args.rank}] {metrics[0].compute()}')
+        if args.metric is not None:
+            self._calc_metric()
         return result_list
 
 

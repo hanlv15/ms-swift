@@ -38,14 +38,15 @@ class TemplateMeta:
     chat_sep: Optional[Prompt]
     suffix: Prompt = field(default_factory=lambda: [['eos_token_id']])
     template_cls: Type[Template] = Template
-    tool_prompt: Optional[Prompt] = None
     system_prefix: Optional[Prompt] = None
+    default_system: Optional[str] = None
+    response_prefix: str = ''
 
     auto_add_bos: bool = False
-    default_system: Optional[str] = None
     stop_words: List[Word] = field(default_factory=list)
     placeholder_tokens: List[Union[int, str]] = field(default_factory=list)
 
+    tool_prompt: Optional[Prompt] = None
     default_tools_prompt: str = 'react_en'
 
     def to_generate_template_meta(self) -> 'TemplateMeta':
@@ -127,6 +128,18 @@ class TemplateMeta:
             self.stop_words.append(self.suffix[-1])
         if tokenizer.eos_token not in self.stop_words:
             self.stop_words.append(tokenizer.eos_token)
+
+        self.stop_token_id = tokenizer.eos_token_id
+        if self.suffix:
+            suffix_tokens = self.suffix[-1]
+            if isinstance(suffix_tokens, str):
+                stop_token_id = tokenizer.convert_tokens_to_ids(suffix_tokens)
+            elif isinstance(suffix_tokens, list) and len(suffix_tokens) == 1:
+                stop_token_id = suffix_tokens[0]
+            else:
+                stop_token_id = None
+            if stop_token_id is not None:
+                self.stop_token_id = stop_token_id
 
     def check_system(self, system: Optional[str]) -> None:
         if system is not None:

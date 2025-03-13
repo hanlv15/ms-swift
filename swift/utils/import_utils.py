@@ -16,16 +16,16 @@ def is_vllm_available():
     return importlib.util.find_spec('vllm') is not None
 
 
-def is_merge_kit_available():
-    return importlib.util.find_spec('mergekit') is not None
-
-
 def is_lmdeploy_available():
     return importlib.util.find_spec('lmdeploy') is not None
 
 
 def is_liger_available():
     return importlib.util.find_spec('liger_kernel') is not None
+
+
+def is_swanlab_available():
+    return importlib.util.find_spec('swanlab') is not None
 
 
 def is_xtuner_available():
@@ -42,6 +42,10 @@ def is_unsloth_available() -> bool:
 
 def is_pyreft_available() -> bool:
     return importlib.util.find_spec('pyreft') is not None
+
+
+def is_wandb_available() -> bool:
+    return importlib.util.find_spec('wandb') is not None
 
 
 class _LazyModule(ModuleType):

@@ -42,13 +42,14 @@ def apply_liger(model_type: str):
         raise ValueError(f'Unsupported liger model_type: {model_type}')
 
 
-def get_multimodal_target_regex(model_arch,
-                                *,
-                                freeze_llm: bool = False,
-                                freeze_vit: bool = True,
-                                freeze_aligner: bool = True,
-                                ignore_embedding: bool = True,
-                                ignore_lm_head: bool = True) -> str:
+def get_multimodal_target_regex(
+    model_arch,
+    *,
+    freeze_llm: bool = False,
+    freeze_vit: bool = True,
+    freeze_aligner: bool = True,
+    ignore_embedding: bool = True,
+) -> str:
     modules = []
     rejected_modules = []
     if not freeze_llm:
@@ -68,9 +69,9 @@ def get_multimodal_target_regex(model_arch,
     if ignore_embedding:
         ignore_pattern += ['emb', 'wte', 'shared']
         ignore_pattern += model_arch.embedding or []
-    if ignore_lm_head:
-        ignore_pattern += ['lm_head', 'output']
-        ignore_pattern += model_arch.lm_head or []
+    # lm_head
+    ignore_pattern += ['lm_head', 'output', 'score', 'v_head', 'classifier']
+    ignore_pattern += model_arch.lm_head or []
     ignore_pattern = '|'.join(ignore_pattern)
 
     target_regex = f'^({prefix_pattern})'
@@ -88,8 +89,8 @@ def get_target_modules(args, model) -> Union[str, List[str]]:
         return args.target_modules
     target_modules = args.target_modules.copy()
     if 'all-linear' in target_modules:
-        if model_meta.is_multimodal:
-            model_arch = get_model_arch(args.model_meta.model_arch)
+        model_arch = get_model_arch(args.model_meta.model_arch)
+        if model_meta.is_multimodal and model_arch:
             return get_multimodal_target_regex(
                 model_arch,
                 freeze_llm=args.freeze_llm,
@@ -105,7 +106,7 @@ def get_target_modules(args, model) -> Union[str, List[str]]:
     return target_modules
 
 
-def get_modules_to_save(args, model):
+def get_modules_to_save(args, model, task_type=None):
     modules_to_save = args.modules_to_save.copy()
     if 'all-embedding' in args.modules_to_save:
         modules_to_save.remove('all-embedding')
@@ -113,6 +114,8 @@ def get_modules_to_save(args, model):
     if 'all-norm' in args.modules_to_save:
         modules_to_save.remove('all-norm')
         modules_to_save += find_norm(model)
+    if task_type and task_type.lower() == 'seq_cls':  # reward_model
+        modules_to_save.append('v_head')
     return modules_to_save
 
 
@@ -136,11 +139,12 @@ def get_vera_target_modules(model, config):
     return config
 
 
-def prepare_adapter(args: TrainArguments, model, *, template=None, train_dataset=None):
+def prepare_adapter(args: TrainArguments, model, *, template=None, train_dataset=None, task_type=None):
     from swift.tuners import (AdaLoraConfig, AdapterConfig, BOFTConfig, LLaMAProConfig, LongLoRAModelType, LoraConfig,
                               LoRAConfig, ReftConfig, Swift, VeraConfig)
+    task_type = (task_type or args.task_type).upper()
     target_modules = get_target_modules(args, model)
-    modules_to_save = get_modules_to_save(args, model)
+    modules_to_save = get_modules_to_save(args, model, task_type)
     lora_kwargs = {
         'r': args.lora_rank,
         'target_modules': target_modules,
@@ -153,13 +157,14 @@ def prepare_adapter(args: TrainArguments, model, *, template=None, train_dataset
         'lorap_lr_ratio': args.lorap_lr_ratio,
         'init_lora_weights': args.init_weights,
     }
-    task_type = args.task_type.upper()
     if args.train_type in ('lora', 'longlora'):
         if args.use_swift_lora:
             lora_config = LoRAConfig(lora_dtype=args.lora_dtype, **lora_kwargs)
             model = Swift.prepare_model(model, lora_config)
             logger.info(f'lora_config: {lora_config}')
         elif args.tuner_backend == 'peft':
+            if task_type == 'EMBEDDING':
+                task_type = None
             lora_config = LoraConfig(task_type=task_type, lora_dtype=args.lora_dtype, **lora_kwargs)
             if args.init_weights == 'lora-ga':
                 try:
@@ -197,7 +202,7 @@ def prepare_adapter(args: TrainArguments, model, *, template=None, train_dataset
                 model = UnslothModel.get_peft_model(
                     model,
                     use_gradient_checkpointing=True,
-                    max_seq_length=args.max_length,
+                    max_seq_length=args.max_length or 2048,  # 2048 is the default value of unsloth
                     **lora_kwargs,
                 )
                 logger.info(f'unsloth_config: {lora_kwargs}')
@@ -329,20 +334,13 @@ def torchacc_resume_from_checkpoint(args, model):
 class TunerMixin:
 
     @classmethod
-    def prepare_model(
-        cls,
-        args,
-        model,
-        *,
-        template=None,
-        train_dataset=None,
-    ):
+    def prepare_model(cls, args, model, *, template=None, train_dataset=None, task_type=None):
         if args.use_liger:
             # Apply liger
             apply_liger(args.model_type)
 
         if args.is_adapter:
-            if args.tuner_backend != 'unsloth':
+            if args.tuner_backend != 'unsloth' and args.train_type not in extra_tuners:
                 # Fix the name of the layer in xcomposer that contains Plora.
                 # Unsloth prepares and loads lora outside this function when
                 # resume_from_checkpoint, so do not disable grad here
@@ -361,7 +359,8 @@ class TunerMixin:
                     tuner: Tuner = extra_tuners[args.train_type]
                     model = tuner.prepare_model(args, model)
                 else:
-                    model = prepare_adapter(args, model, template=template, train_dataset=train_dataset)
+                    model = prepare_adapter(
+                        args, model, template=template, train_dataset=train_dataset, task_type=task_type)
             # fix bug: Attempting to unscale FP16 gradients.
             #   peft: https://github.com/huggingface/peft/issues/1249
             for p in model.parameters():
@@ -403,6 +402,7 @@ class TunerMixin:
                 gamma_proj=args.galore_gamma_proj,
                 queue_size=args.galore_queue_size,
             )
+            args.training_args.galore_config = args.galore_config
 
         if args.sequence_parallel_size > 1:
             from swift.trainers.xtuner import dispatch_module_xtuner

@@ -34,6 +34,17 @@ register_template(
 
 register_template(
     TemplateMeta(
+        LLMTemplateType.baichuan_m1,
+        prefix=[],
+        prompt=['<C_Q>{{QUERY}}<C_A>'],
+        chat_sep=[],
+        suffix=['<C_A>'],
+        system_prefix=['<B_SYS>{{SYSTEM}}'],
+        default_system=DEFAULT_SYSTEM,
+    ))
+
+register_template(
+    TemplateMeta(
         LLMTemplateType.numina,
         prefix=[['bos_token_id']],
         prompt=['### Problem: {{QUERY}}\n### Solution: '],
@@ -47,6 +58,27 @@ register_template(
         prompt=['{{SYSTEM}}\n\n', '{{QUERY}}[/INST]'],
         chat_sep=['</s>[INST] '],
         suffix=['</s>']))
+
+mistral_2501_system = (
+    'You are Mistral Small 3, a Large Language Model (LLM) created by Mistral AI, a French startup '
+    'headquartered in Paris.\n'
+    'Your knowledge base was last updated on 2023-10-01. The current date is 2025-02-07.\n\n'
+    "When you're not sure about some information, you say that you don't have the information and don't "
+    'make up anything.\n'
+    "If the user's question is not clear, ambiguous, or does not provide enough context for you to accurately answer "
+    'the question, you do not try to answer it right away and you rather ask the user to clarify their request (e.g. '
+    '"What are some good restaurants around me?" => "Where are you?" or "When is the next flight to Tokyo" => "'
+    'Where do you travel from?")')
+
+register_template(
+    TemplateMeta(
+        LLMTemplateType.mistral_2501,
+        prefix=['<s>'],
+        prompt=['[INST]{{QUERY}}[/INST]'],
+        chat_sep=['</s>'],
+        suffix=['</s>'],
+        system_prefix=['<s>[SYSTEM_PROMPT]{{SYSTEM}}[/SYSTEM_PROMPT]'],
+        default_system=mistral_2501_system))
 
 register_template(
     TemplateMeta(
@@ -133,24 +165,17 @@ register_template(
 @dataclass
 class TeleChatTemplateMeta(TemplateMeta):
     prefix: Prompt = field(default_factory=list)
-    prompt: Prompt = field(default_factory=lambda: ['<_user>{{QUERY}}<_bot>'])
-    chat_sep: Optional[Prompt] = field(default_factory=lambda: ['<_end>'])
-    suffix: Prompt = field(default_factory=lambda: ['<_end>'])
+    prompt: Prompt = field(default_factory=lambda: [['user_token_id'], '{{QUERY}}', ['bot_token_id']])
+    chat_sep: Optional[Prompt] = field(default_factory=lambda: [['eos_token_id']])
+    suffix: Prompt = field(default_factory=lambda: [['eos_token_id']])
     system_prefix: Optional[Prompt] = field(default_factory=lambda: ['<_system>{{SYSTEM}}\n'])
+    auto_add_bos: bool = True
 
 
 register_template(TeleChatTemplateMeta(LLMTemplateType.telechat))
 
-telechat2_system = '你是中国电信星辰语义大模型，英文名是TeleChat，你是由中电信人工智能科技有限公司和中国电信人工智能研究院（TeleAI）研发的人工智能助手。\n'
-register_template(TeleChatTemplateMeta(LLMTemplateType.telechat2, default_system=telechat2_system))
-
-register_template(
-    TemplateMeta(
-        LLMTemplateType.telechat2_115b,
-        prefix=['<_start>'],
-        prompt=[[4], '{{QUERY}}', [5]],
-        chat_sep=['<_end>'],
-        suffix=['<_end>']))
+telechat_system = '你是中国电信星辰语义大模型，英文名是TeleChat，你是由中电信人工智能科技有限公司和中国电信人工智能研究院（TeleAI）研发的人工智能助手。'
+register_template(TeleChatTemplateMeta(LLMTemplateType.telechat2, default_system=telechat_system))
 
 DBRX_SYSTEM = (
     'You are DBRX, created by Databricks. You were last updated in December 2023. '
@@ -231,3 +256,24 @@ register_template(
         suffix=['<|END_OF_TURN_TOKEN|>'],
         default_system=AYA_SYSTEM,
         system_prefix=['<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>{{SYSTEM}}<|END_OF_TURN_TOKEN|']))
+
+register_template(
+    TemplateMeta(
+        LLMTemplateType.moonlight,
+        prefix=[],
+        system_prefix=['<|im_system|>system<|im_middle|>{{SYSTEM}}<|im_end|>'],
+        prompt=['<|im_user|>user<|im_middle|>{{QUERY}}<|im_end|><|im_assistant|>assistant<|im_middle|>'],
+        chat_sep=['<|im_end|>'],
+        suffix=['<|im_end|>'],
+        default_system='You are a helpful assistant',
+    ))
+
+register_template(
+    TemplateMeta(
+        LLMTemplateType.ling,
+        prefix=[],
+        system_prefix=['<role>SYSTEM</role>{{SYSTEM}}'],
+        prompt=['<role>HUMAN</role>{{QUERY}}<role>ASSISTANT</role>'],
+        chat_sep=[],
+        suffix=['<|endoftext|>'],
+    ))

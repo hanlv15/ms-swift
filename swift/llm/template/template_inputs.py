@@ -7,13 +7,9 @@ import json
 from PIL import Image
 
 from swift.utils import get_logger
-from ..utils import messages_to_history
+from ..utils import Messages, Tool, messages_to_history
 
 logger = get_logger()
-
-Tool = Dict[str, Union[str, Dict]]
-Message = Dict[str, Union[str, List[Dict[str, Any]]]]
-Messages = List[Message]
 
 
 @dataclass
@@ -43,14 +39,14 @@ class InferRequest:
     videos: List[str] = field(default_factory=list)
 
     tools: Optional[List[Tool]] = None
+    objects: Dict[str, List[Any]] = field(default_factory=dict)
 
     def __post_init__(self):
         for key in ['images', 'audios', 'videos']:
             val = getattr(self, key)
             if isinstance(val, str):
                 setattr(self, key, [val])
-
-        self.remove_response(self.messages)
+        assert isinstance(self.messages, list), f'messages: {self.messages}'
 
     @staticmethod
     def remove_response(messages) -> Optional[str]:
@@ -86,16 +82,6 @@ class TemplateInputs(InferRequest):
     """
     rejected_response: Optional[str] = None
     label: Optional[bool] = None
-    objects: Union[str, None, List[Dict[str, Any]]] = None  # List[Dict[str, Any]]
-
-    def __post_init__(self):
-        InferRequest.__post_init__(self)
-        # Format objects(groundings/refs) to json
-        if isinstance(self.objects, str):
-            # reload grounding from str
-            self.objects = json.loads(self.objects)
-        elif self.objects is None:
-            self.objects = []
 
 
 @dataclass
@@ -111,7 +97,7 @@ class StdTemplateInputs:
     images: List[Union[str, Image.Image]] = field(default_factory=list)
     audios: List[str] = field(default_factory=list)
     videos: List[str] = field(default_factory=list)
-    objects: List[Dict[str, Any]] = field(default_factory=list)
+    objects: Dict[str, List[Any]] = field(default_factory=dict)
 
     agent_keyword: Optional[Dict[str, str]] = None
 
@@ -119,8 +105,8 @@ class StdTemplateInputs:
         self.image_idx = 0
         self.audio_idx = 0
         self.video_idx = 0
-        self.object_idx = 0
-        self.box_idx = 0
+        self.ref_idx = 0
+        self.bbox_idx = 0
         if self.images and not isinstance(self.images, (list, tuple)):
             self.images = [self.images]
         if self.videos and not isinstance(self.videos, (list, tuple)):
@@ -142,14 +128,13 @@ class StdTemplateInputs:
     @classmethod
     def from_dict(cls, inputs: Dict[str, Any], *, tools_prompt: str = 'react_en') -> 'StdTemplateInputs':
         from swift.plugin import get_tools_prompt, get_tools_keyword
-        inputs = deepcopy(inputs)
         kwargs = {}
         for key in ['rejected_response', 'label']:
             if key in inputs:
                 kwargs[key] = inputs[key]
         messages = inputs['messages']
         tools = inputs.get('tools')
-        objects = inputs.get('objects') or []
+        objects = inputs.get('objects') or {}
 
         if messages and messages[0]['role'] == 'system':
             message = messages.pop(0)
@@ -246,5 +231,10 @@ class StdTemplateInputs:
                 assert isinstance(pre_content, str)
                 pre_message['content'] = pre_content + content  # assistant
                 messages.pop(i)  # remove tool
+            elif (pre_role == 'assistant' and role == 'assistant' and isinstance(pre_content, str)
+                  and isinstance(content, str)):
+                # Consecutive messages from the assistant role need to be merged to prevent errors.
+                pre_message['content'] = pre_content + content
+                messages.pop(i)
             else:
                 i += 1

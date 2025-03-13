@@ -1,16 +1,13 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
 import os
-from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
 from types import MethodType
 from typing import Any, Dict, List, Literal, Optional, Tuple, TypeVar, Union
 
 import torch
-import transformers
 from accelerate.utils import find_device
 from modelscope.hub.utils.utils import get_cache_dir
-from packaging import version
 from transformers import PretrainedConfig
 
 from swift.hub import get_hub
@@ -27,6 +24,9 @@ class AttnImpl:
     sdpa = 'sdpa'
     eager = 'eager'
 
+    attn_impl_keys = ['_attn_implementation', 'attn_implementation', 'llm_attn_implementation']
+    use_flash_attn_keys = ['_flash_attn_2_enabled', 'use_flash_attn', '_use_flash_attention_2']
+
     @staticmethod
     def to_use_flash_attn(attn_impl: Optional[str], auto_value: _T = None) -> Union[bool, _T]:
         if attn_impl is None:
@@ -34,18 +34,21 @@ class AttnImpl:
         return attn_impl == AttnImpl.flash_attn
 
     @staticmethod
-    def update_attn_impl(config: PretrainedConfig, attn_impl: Optional[str], auto_value: _T = None) -> None:
-
-        use_flash_attn = AttnImpl.to_use_flash_attn(attn_impl, auto_value)
-        if use_flash_attn is None:
+    def update_attn_impl(config: PretrainedConfig,
+                         attn_impl: Optional[str],
+                         attn_impl_keys: Optional[List[str]] = None) -> None:
+        if attn_impl is None:
             return
-        from swift.llm import HfConfigFactory
-        if version.parse(transformers.__version__) >= version.parse('4.36'):
-            if use_flash_attn:
-                attn_impl = 'flash_attention_2'
-            HfConfigFactory.set_config_attr(config, '_attn_implementation', attn_impl)
-        else:
-            HfConfigFactory.set_config_attr(config, '_flash_attn_2_enabled', use_flash_attn)
+        use_flash_attn = AttnImpl.to_use_flash_attn(attn_impl)
+        if use_flash_attn:
+            attn_impl = 'flash_attention_2'
+        if isinstance(attn_impl_keys, str):
+            attn_impl_keys = [attn_impl_keys]
+        attn_impl_keys = attn_impl_keys or AttnImpl.attn_impl_keys
+        for key in attn_impl_keys:
+            HfConfigFactory.set_config_attr(config, key, attn_impl, ensure_set=False)
+        for key in AttnImpl.use_flash_attn_keys:
+            HfConfigFactory.set_config_attr(config, key, use_flash_attn, ensure_set=False)
 
 
 @dataclass
@@ -58,8 +61,10 @@ class ModelInfo:
     quant_bits: int
 
     # extra
+    rope_scaling: Optional[Dict[str, Any]] = None
     config: Optional[PretrainedConfig] = None
-    task_type: Optional[str] = None
+    task_type: Literal['causal_lm', 'seq_cls', 'embedding', None] = None
+    num_labels: Optional[int] = None
 
     def __post_init__(self):
         from .register import get_model_name
@@ -108,16 +113,26 @@ class HfConfigFactory:
             return attrs[0][1]
 
     @staticmethod
-    def set_config_attr(config: Union[PretrainedConfig, Dict[str, Any]], attr_name: str, value: Any) -> None:
+    def set_config_attr(config: Union[PretrainedConfig, Dict[str, Any]],
+                        attr_name: str,
+                        value: Any,
+                        ensure_set: bool = True) -> int:
         """Set all the attr_name attributes to value."""
         attrs = HfConfigFactory._get_config_attrs(config, attr_name)
-        if len(attrs) == 0:
+        if ensure_set and len(attrs) == 0:
             attrs.append((config, None))
         for config, _ in attrs:
             if isinstance(config, dict):
                 config[attr_name] = value
             else:
                 setattr(config, attr_name, value)
+        return len(attrs)
+
+    @staticmethod
+    def set_model_config_attr(model, attr_name: str, value: Any) -> None:
+        for module in model.modules():
+            if getattr(module, 'config', None) and getattr(module.config, attr_name, value) != value:
+                setattr(module.config, attr_name, value)
 
     @staticmethod
     def get_max_model_len(config: Union[PretrainedConfig, Dict[str, Any]]) -> Optional[int]:
@@ -195,27 +210,6 @@ class HfConfigFactory:
 
         return res or None
 
-    @staticmethod
-    def _get_arch_mapping():
-        from .register import MODEL_MAPPING
-        res = {}
-        for model_type, model_meta in MODEL_MAPPING.items():
-            architectures = model_meta.architectures
-            for arch in architectures:
-                if arch not in res:
-                    res[arch] = []
-                res[arch].append(model_type)
-        return res
-
-    @staticmethod
-    def get_matched_model_types(config: Union[PretrainedConfig, Dict[str, Any]]) -> List[str]:
-        """Get possible model_type."""
-        arch = HfConfigFactory.get_config_attr(config, 'architectures')
-        if arch:
-            arch = arch[0]
-        arch_mapping = HfConfigFactory._get_arch_mapping()
-        return arch_mapping.get(arch) or []
-
 
 def safe_snapshot_download(model_id_or_path: str,
                            revision: Optional[str] = None,
@@ -223,6 +217,7 @@ def safe_snapshot_download(model_id_or_path: str,
                            use_hf: Optional[bool] = None,
                            hub_token: Optional[str] = None,
                            ignore_patterns: Optional[List[str]] = None,
+                           check_local: bool = False,
                            **kwargs) -> str:
     """Download model protected by DDP context
 
@@ -235,6 +230,12 @@ def safe_snapshot_download(model_id_or_path: str,
     Returns:
         model_dir
     """
+    if check_local:
+        model_suffix = model_id_or_path.rsplit('/', 1)[-1]
+        if os.path.exists(model_suffix):
+            model_dir = os.path.abspath(os.path.expanduser(model_suffix))
+            logger.info(f'Loading the model using local model_dir: {model_dir}')
+            return model_dir
     if ignore_patterns is None:
         ignore_patterns = []
     ignore_patterns += [
@@ -310,7 +311,7 @@ def use_submodel_func(model, submodel_name: str, func_list: Optional[List[str]] 
     submodel = getattr(model, submodel_name)
 
     def _get_new_func(func_name: str):
-        _old_func = getattr(submodel.__class__, func_name)
+        _old_func = getattr(submodel, func_name).__func__
 
         @wraps(_old_func)
         def _new_func(self, *args, **kwargs):
@@ -331,19 +332,3 @@ def use_submodel_func(model, submodel_name: str, func_list: Optional[List[str]] 
             submodel.__class__.device = model.device
         if key == 'forward' and 'generate' in func_list:
             setattr(submodel, key, MethodType(_get_new_func(key), submodel))  # fix device_map
-
-
-@contextmanager
-def ignore_check_imports():
-    import transformers.dynamic_module_utils as td
-
-    @wraps(td.check_imports)
-    def _check_imports(filename) -> List[str]:
-        return td.get_relative_imports(filename)
-
-    _old_check_imports = td.check_imports
-    td.check_imports = _check_imports
-    try:
-        yield
-    finally:
-        td.check_imports = _old_check_imports

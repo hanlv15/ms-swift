@@ -3,26 +3,19 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
 import torch
-import transformers
-from packaging import version
 
 from ..base import Template
 from ..constant import MLLMTemplateType
 from ..register import TemplateMeta, register_template
 from ..template_inputs import StdTemplateInputs
 from ..utils import Context, Prompt, findall
-from ..vision_utils import load_batch, load_video_llava
+from ..vision_utils import load_video_llava
 from .llama import Llama3TemplateMeta
 from .qwen import QwenTemplateMeta
 from .utils import ChatmlTemplateMeta
 
 
 class LlavaHfTemplate(Template):
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        if version.parse(transformers.__version__) < version.parse('4.43.0'):
-            self.padding_side = 'left'
 
     def replace_tag(self, media_type: Literal['image', 'video', 'audio'], index: int,
                     inputs: StdTemplateInputs) -> List[Context]:
