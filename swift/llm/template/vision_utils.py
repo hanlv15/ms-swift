@@ -112,6 +112,9 @@ def load_file(path: Union[str, bytes, _T]) -> Union[BytesIO, _T]:
             content = requests.get(path, **request_kwargs).content
             res = BytesIO(content)
         elif os.path.exists(path) or (not path.startswith('data:') and len(path) <= 200):
+            ROOT_IMAGE_DIR = get_env_args('ROOT_IMAGE_DIR', str, None)
+            if ROOT_IMAGE_DIR is not None and not os.path.exists(path):
+                path = os.path.join(ROOT_IMAGE_DIR, path)
             path = os.path.abspath(os.path.expanduser(path))
             with open(path, 'rb') as f:
                 res = BytesIO(f.read())
@@ -146,6 +149,28 @@ def load_batch(path_list: List[Union[str, None, Any, BytesIO]],
             continue
         res.append(load_func(path))
     return res
+
+
+def load_video_hf(videos: List[str]):
+    from transformers.video_utils import load_video
+    res = []
+    video_metadata = []
+    for video in videos:
+        if isinstance(video, (list, tuple)) and isinstance(video[0], str):
+            # Case a: Video is provided as a list of image file names
+            video = [np.array(load_image(image_fname)) for image_fname in video]
+            video = np.stack(video)
+            metadata = None
+        else:
+            # Case b: Video is provided as a single file path or URL or decoded frames in a np.ndarray or torch.tensor
+            video_load_backend = get_env_args('video_load_backend', str, 'pyav')
+            video, metadata = load_video(
+                video,
+                backend=video_load_backend,
+            )
+        res.append(video)
+        video_metadata.append(metadata)
+    return res, video_metadata
 
 
 def _get_index(bound, fps, max_frame, first_idx=0, num_segments=32):
@@ -272,4 +297,13 @@ def load_video_ovis2(video_path, num_frames):
             ]
         frames = [clip.get_frame(index / clip.fps) for index in sampled_indices]
         frames = [Image.fromarray(frame, mode='RGB') for frame in frames]
+    return frames
+
+
+def load_video_ovis2_5(video_path, num_frames):
+    from moviepy.editor import VideoFileClip
+    with VideoFileClip(video_path) as clip:
+        total_frames = int(clip.fps * clip.duration)
+        indices = [int(i * total_frames / num_frames) for i in range(num_frames)]
+        frames = [Image.fromarray(clip.get_frame(t)) for t in (idx / clip.fps for idx in indices)]
     return frames

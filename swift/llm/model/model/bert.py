@@ -2,8 +2,9 @@
 from types import MethodType
 
 import torch.nn.functional as F
-from transformers import AutoConfig
+from transformers import AutoConfig, AutoModel
 
+from swift.llm import TemplateType
 from swift.utils import get_logger
 from ..constant import BertModelType
 from ..register import Model, ModelGroup, ModelMeta, get_model_tokenizer_from_local, register_model
@@ -33,10 +34,15 @@ register_model(
 
 
 def get_model_tokenizer_gte_bert(*args, **kwargs):
+    kwargs['automodel_class'] = AutoModel
     model, tokenizer = get_model_tokenizer_from_local(*args, **kwargs)
     if model is not None:
-        from swift.llm.model.patcher import patch_output_normalizer
-        patch_output_normalizer(model)
+
+        def _normalizer_hook(module, input, output):
+            output.last_hidden_state = F.normalize(output.last_hidden_state[:, 0], p=2, dim=1)
+            return output
+
+        model.register_forward_hook(_normalizer_hook)
     return model, tokenizer
 
 
@@ -50,6 +56,17 @@ register_model(
         get_model_tokenizer_gte_bert,
         requires=['transformers>=4.48'],
         tags=['bert', 'embedding']))
+
+register_model(
+    ModelMeta(
+        BertModelType.modern_bert_gte_reranker,
+        [ModelGroup([
+            Model('iic/gte-reranker-modernbert-base', 'Alibaba-NLP/gte-reranker-modernbert-base'),
+        ])],
+        TemplateType.bert,
+        get_model_tokenizer_from_local,
+        requires=['transformers>=4.48'],
+        tags=['bert', 'reranker']))
 
 register_model(
     ModelMeta(

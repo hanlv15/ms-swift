@@ -4,7 +4,6 @@ from typing import List, Literal, Optional
 
 from transformers.utils import strtobool
 
-from swift.llm import get_model_arch
 from swift.utils import get_logger
 
 logger = get_logger()
@@ -95,13 +94,13 @@ class TunerArguments:
         reft_rank (int): Rank parameter for ReFT. Default is 4.
         reft_intervention_type (Literal): Type of intervention for ReFT. Default is 'LoreftIntervention'.
         reft_args (Optional[str]): Additional arguments for ReFT. Default is None.
-
-        use_liger (bool): Flag to indicate if Liger-kernel is used. Default is False.
     """
     # full
     freeze_parameters: List[str] = field(default_factory=list)
+    freeze_parameters_regex: Optional[str] = None
     freeze_parameters_ratio: float = 0.  # 0 ~ 1
     trainable_parameters: List[str] = field(default_factory=list)
+    trainable_parameters_regex: Optional[str] = None
     # lora or full
     freeze_llm: bool = False
     freeze_vit: bool = True
@@ -109,6 +108,7 @@ class TunerArguments:
     # tuners
     target_modules: List[str] = field(default_factory=lambda: ['all-linear'])
     target_regex: Optional[str] = None
+    target_parameters: Optional[List[str]] = None
     # e.g. ['wte', 'ln_1', 'ln_2', 'ln_f', 'lm_head']
     modules_to_save: List[str] = field(default_factory=list)
 
@@ -196,9 +196,6 @@ class TunerArguments:
                                     'NodireftIntervention'] = 'LoreftIntervention'
     reft_args: Optional[str] = None
 
-    # use_liger
-    use_liger: bool = False
-
     def __post_init__(self):
         if isinstance(self.init_weights, str) and self.init_weights.lower() in {'true', 'false'}:
             self.init_weights = bool(strtobool(self.init_weights))
@@ -207,8 +204,8 @@ class TunerArguments:
             self.target_modules = self.target_regex
 
     def _init_multimodal_full(self):
-        model_arch = get_model_arch(self.model_meta.model_arch)
-        if not self.model_meta.is_multimodal or not model_arch:
+        model_arch = self.model_meta.model_arch
+        if not self.model_meta.is_multimodal or not model_arch or self.train_type != 'full':
             return
         if self.freeze_llm:
             self.freeze_parameters += model_arch.language_model

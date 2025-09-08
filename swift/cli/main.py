@@ -16,14 +16,13 @@ ROUTE_MAPPING: Dict[str, str] = {
     'merge-lora': 'swift.cli.merge_lora',
     'web-ui': 'swift.cli.web_ui',
     'deploy': 'swift.cli.deploy',
+    'rollout': 'swift.cli.rollout',
     'rlhf': 'swift.cli.rlhf',
     'sample': 'swift.cli.sample',
     'export': 'swift.cli.export',
     'eval': 'swift.cli.eval',
     'app': 'swift.cli.app',
 }
-
-ROUTE_MAPPING.update({k.replace('-', '_'): v for k, v in ROUTE_MAPPING.items()})
 
 
 def use_torchrun() -> bool:
@@ -54,12 +53,13 @@ def _compat_web_ui(argv):
         logger.warning('Please use `swift app`.')
 
 
-def cli_main() -> None:
+def cli_main(route_mapping: Optional[Dict[str, str]] = None) -> None:
+    route_mapping = route_mapping or ROUTE_MAPPING
     argv = sys.argv[1:]
     _compat_web_ui(argv)
-    method_name = argv[0]
+    method_name = argv[0].replace('_', '-')
     argv = argv[1:]
-    file_path = importlib.util.find_spec(ROUTE_MAPPING[method_name]).origin
+    file_path = importlib.util.find_spec(route_mapping[method_name]).origin
     torchrun_args = get_torchrun_args()
     python_cmd = sys.executable
     if torchrun_args is None or method_name not in {'pt', 'sft', 'rlhf', 'infer'}:

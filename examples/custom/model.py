@@ -77,7 +77,9 @@ register_model(
         ],
         template='custom',
         get_function=get_model_tokenizer_with_flash_attn,
-        ignore_patterns=['nemo']))
+        ignore_patterns=['nemo'],
+        is_multimodal=False,
+    ))
 
 register_model(
     ModelMeta(
@@ -118,5 +120,5 @@ if __name__ == '__main__':
     engine.default_template.template_backend = 'jinja'
     response = engine.infer([infer_request], request_config)
     jinja_response = response[0].choices[0].message.content
-    assert swift_response == jinja_response, (f'swift_response: {swift_response}\njinja_response: {jinja_response}')
+    assert swift_response == jinja_response, f'swift_response: {swift_response}\njinja_response: {jinja_response}'
     print(f'response: {swift_response}')

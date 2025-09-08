@@ -3,7 +3,7 @@ import asyncio
 import inspect
 import multiprocessing
 import time
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import asdict
 from http import HTTPStatus
 from threading import Thread
@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from swift.llm import AdapterRequest, DeployArguments
-from swift.llm.infer.protocol import MultiModalRequestMixin
+from swift.llm.infer.protocol import EmbeddingRequest, MultiModalRequestMixin
 from swift.plugin import InferStats
 from swift.utils import JsonlWriter, get_logger
 from .infer import SwiftInfer
@@ -34,9 +34,11 @@ class SwiftDeploy(SwiftInfer):
         self.app.get('/v1/models')(self.get_available_models)
         self.app.post('/v1/chat/completions')(self.create_chat_completion)
         self.app.post('/v1/completions')(self.create_completion)
+        self.app.post('/v1/embeddings')(self.create_embedding)
 
-    def __init__(self, args: Union[List[str], DeployArguments, None] = None) -> None:
+    def __init__(self, args: Optional[Union[List[str], DeployArguments]] = None) -> None:
         super().__init__(args)
+
         self.infer_engine.strict = True
         self.infer_stats = InferStats()
         self.app = FastAPI(lifespan=self.lifespan)
@@ -57,8 +59,7 @@ class SwiftDeploy(SwiftInfer):
     def lifespan(self, app: FastAPI):
         args = self.args
         if args.log_interval > 0:
-            thread = Thread(target=lambda: asyncio.run(self._log_stats_hook()))
-            thread.daemon = True
+            thread = Thread(target=lambda: asyncio.run(self._log_stats_hook()), daemon=True)
             thread.start()
         try:
             yield
@@ -111,7 +112,8 @@ class SwiftDeploy(SwiftInfer):
         args = self.args
 
         for i in range(len(response.choices)):
-            if not hasattr(response.choices[i], 'message') or isinstance(response.choices[i].message.content, str):
+            if not hasattr(response.choices[i], 'message') or not isinstance(response.choices[i].message.content,
+                                                                             (tuple, list)):
                 continue
             for j, content in enumerate(response.choices[i].message.content):
                 if content['type'] == 'image':
@@ -182,10 +184,17 @@ class SwiftDeploy(SwiftInfer):
                 yield 'data: [DONE]\n\n'
 
             return StreamingResponse(_gen_wrapper(), media_type='text/event-stream')
-        else:
+        elif hasattr(res_or_gen, 'choices'):
+            # instance of ChatCompletionResponse
             return self._post_process(request_info, res_or_gen, return_cmpl_response)
+        else:
+            return res_or_gen
 
     async def create_completion(self, request: CompletionRequest, raw_request: Request):
+        chat_request = ChatCompletionRequest.from_cmpl_request(request)
+        return await self.create_chat_completion(chat_request, raw_request, return_cmpl_response=True)
+
+    async def create_embedding(self, request: EmbeddingRequest, raw_request: Request):
         chat_request = ChatCompletionRequest.from_cmpl_request(request)
         return await self.create_chat_completion(chat_request, raw_request, return_cmpl_response=True)
 
@@ -194,10 +203,15 @@ class SwiftDeploy(SwiftInfer):
         self.jsonl_writer = JsonlWriter(args.result_path) if args.result_path else None
         logger.info(f'model_list: {self._get_model_list()}')
         uvicorn.run(
-            self.app, host=args.host, port=args.port, ssl_keyfile=args.ssl_keyfile, ssl_certfile=args.ssl_certfile)
+            self.app,
+            host=args.host,
+            port=args.port,
+            ssl_keyfile=args.ssl_keyfile,
+            ssl_certfile=args.ssl_certfile,
+            log_level=args.log_level)
 
 
-def deploy_main(args: Union[List[str], DeployArguments, None] = None) -> None:
+def deploy_main(args: Optional[Union[List[str], DeployArguments]] = None) -> None:
     SwiftDeploy(args).main()
 
 

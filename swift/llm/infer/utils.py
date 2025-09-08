@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import List, Literal, Optional
 
+from swift.llm.utils import update_generation_config_eos_token
 from swift.plugin import extra_tuners
 from swift.tuners import Swift
 from swift.utils import get_logger
@@ -142,6 +143,10 @@ def prepare_adapter(args, model, adapters=None):
 
 def prepare_model_template(args, **kwargs):
     model, processor = args.get_model_processor(**kwargs)
-    model = prepare_adapter(args, model)
     template = args.get_template(processor)
+    if model is not None:
+        if template.use_model:
+            template.model = model
+        model = prepare_adapter(args, model)
+        update_generation_config_eos_token(model.generation_config, template)
     return model, template

@@ -4,7 +4,7 @@ Pluginization is a significant new feature introduced in SWIFT 3.0. We aim to ma
 
 ## Callback Mechanism
 
-An example can be found [here](https://github.com/modelscope/swift/blob/main/swift/plugin/callback.py).
+An example can be found [here](https://github.com/modelscope/ms-swift/blob/main/swift/plugin/callback.py).
 
 The `callback` mechanism is a customization feature in the Transformers Trainer that allows developers to control the training process. Typically, customizing a callback looks like the following:
 
@@ -30,24 +30,25 @@ Developers can add new callbacks in `plugin/callback.py` and customize their tra
 
 ## Customizing Loss
 
-An example can be found [here](https://github.com/modelscope/swift/blob/main/swift/plugin/loss.py).
+An example can be found [here](https://github.com/modelscope/ms-swift/blob/main/swift/plugin/loss.py).
 
 SWIFT supports customizing the loss function through plugins. If this feature is not utilized, the default Cross Entropy Loss (CE Loss) is used. Developers can write code in this file to register their custom loss functions, and the trainer will automatically use the customized loss method.
 
 For example, adding the following code in `plugin/loss.py`:
 
 ```python
-@register_loss_func("custom_loss")
-def loss_scale_func(outputs, labels, loss_scale=None, num_items_in_batch=None) -> torch.Tensor:
+def custom_loss_func(outputs, labels, loss_scale=None, num_items_in_batch=None) -> torch.Tensor:
     # Write your own loss calculation here
     return loss
+
+loss_mapping['custom_loss'] = custom_loss_func
 ```
 
 It is important to note that the loss function is strongly related to the training task. Currently, loss customization supports PT and SFT tasks. For human alignment tasks (e.g., DPO, PPO) or classification tasks (seq_cls), loss customization through plugins is not supported.
 
 ## Customizing Loss Scale
 
-An example can be found [here](https://github.com/modelscope/swift/blob/main/swift/plugin/loss_scale.py).
+An example can be found [here](https://github.com/modelscope/ms-swift/blob/main/swift/plugin/loss_scale/loss_scale.py).
 
 The `loss_scale` mechanism is one of the crucial features in SWIFT. In PT and SFT tasks, the loss for trainable tokens is uniform, meaning each token is equally involved in backpropagation. However, in certain situations, some tokens require higher weights and extra attention. In such cases, `loss_scale` allows developers to define custom token weights.
 
@@ -75,7 +76,7 @@ In PT and SFT, `loss_scale` is uniformly supported (whether to participate in tr
 
 ## Customizing Metrics
 
-An example can be found [here](https://github.com/modelscope/swift/blob/main/swift/plugin/metric.py).
+An example can be found [here](https://github.com/modelscope/ms-swift/blob/main/swift/plugin/metric.py).
 
 Metrics can be customized to evaluate the training process:
 
@@ -94,7 +95,8 @@ In the above definition, we added a new `custom` metric. Its value consists of t
 
 ## Customizing Optimizers
 
-An example can be found [here](https://github.com/modelscope/swift/blob/main/swift/plugin/optimizer.py).
+An example can be found [here](https://github.com/modelscope/ms-swift/blob/main/swift/plugin/optimizer.py).
+- Apply different learning rates to different parts of the model. For example, use separate learning rates for ViT and LLM, as referenced [here](https://github.com/modelscope/ms-swift/blob/main/examples/train/multimodal/lora_llm_full_vit/custom_plugin.py).
 
 Users can add their own optimizers and learning rate schedulers here:
 
@@ -117,45 +119,16 @@ When developers need to use other optimizers, such as those defined in new resea
 
 This will invoke the custom optimizer.
 
-## Customizing Tools
 
-An example can be found [here](https://github.com/modelscope/swift/blob/main/swift/plugin/tools.py).
+## Customizing Agent Template
 
-Here, you can define the format of tools used in Agent training. The tools format refers to how tools are enumerated in the system field during training and inference. For example, `glm4` has its unique tools format:
-
-```python
-def format_glm4(tool_names, tool_descs):
-    GLM4_PROMPT = """You are an AI assistant named ChatGLM. You are developed based on the GLM-4 model trained by Zhiyupo AI. Your task is to provide appropriate responses and support based on user questions and requests.
-
-# Available Tools
-
-{tool_list}"""
-    tool_descs = [json.dumps(t) if not isinstance(t, str) else t for t in tool_descs]
-    tool_list = ''
-    for name, tool in zip(tool_names, tool_descs):
-        tool_list += f'## {name}\n\n{tool}\n\n'
-    return GLM4_PROMPT.format(tool_list=tool_list)
-```
-
-The complete format in the system field looks similar to this:
-
-```text
-You are an AI assistant named ChatGLM. You are developed based on the GLM-4 model trained by Zhiyupo AI. Your task is to provide appropriate responses and support based on user questions and requests.
-
-# Available Tools
-
-## Check Weather
-
-...
-
-## Search Web
-
-...
-```
+The example is [here](https://github.com/modelscope/ms-swift/blob/main/swift/plugin/agent_template).
 
 ## Customizing Tuners
 
-An example can be found [here](https://github.com/modelscope/swift/blob/main/swift/plugin/tuner.py).
+An example can be found [here](https://github.com/modelscope/ms-swift/blob/main/swift/plugin/tuner.py).
+- For the multimodal model, full-parameter training is applied to the ViT part, while LoRA training is used for the LLM part. Refer to [here](https://github.com/modelscope/ms-swift/tree/main/examples/train/multimodal/lora_llm_full_vit).
+- For Phi4-multimodal, train its existing LoRA directly without adding extra LoRA. Refer to [here](https://github.com/modelscope/ms-swift/blob/main/examples/train/plugins/tuner_phi4_mm.sh).
 
 Tuner customization is another unique feature of SWIFT. Developers can bypass the complex tuner initialization process and code integration costs by registering new tuners here:
 
@@ -163,8 +136,8 @@ Tuner customization is another unique feature of SWIFT. Developers can bypass th
 class IA3(Tuner):
 
     @staticmethod
-    def prepare_model(args: 'TrainArguments', model: torch.nn.Module):
-        model_arch: ModelKeys = MODEL_ARCH_MAPPING[model.model_meta.model_arch]
+    def prepare_model(args: 'TrainArguments', model: torch.nn.Module) -> torch.nn.Module:
+        model_arch: ModelKeys = model.model_meta.model_arch
         ia3_config = IA3Config(
             target_modules=find_all_linears(model), feedforward_modules='.*' + model_arch.mlp.split('{}.')[1] + '.*')
         return get_peft_model(model, ia3_config)
@@ -173,14 +146,15 @@ class IA3(Tuner):
     def save_pretrained(
         model: torch.nn.Module,
         save_directory: str,
+        state_dict: Optional[dict] = None,
         safe_serialization: bool = True,
         **kwargs,
-    ):
+    ) -> None:
         model: PeftModel
-        model.save_pretrained(save_directory, safe_serialization=safe_serialization, **kwargs)
+        model.save_pretrained(save_directory, state_dict=state_dict, safe_serialization=safe_serialization, **kwargs)
 
     @staticmethod
-    def from_pretrained(model: torch.nn.Module, model_id: str, **kwargs):
+    def from_pretrained(model: torch.nn.Module, model_id: str, **kwargs) -> torch.nn.Module:
         return PeftModel.from_pretrained(model, model_id, **kwargs)
 ```
 
@@ -194,7 +168,7 @@ These three methods are invoked during the SWIFT training process, allowing deve
 
 ## PRM (Process Reward Model)
 
-An example can be found [here](https://github.com/modelscope/swift/blob/main/swift/plugin/prm.py).
+An example can be found [here](https://github.com/modelscope/ms-swift/blob/main/swift/plugin/prm.py).
 
 PRM stands for Process Reward Model, which is used in the `swift sample` command. PRM needs to support simple interfaces:
 
@@ -225,7 +199,7 @@ Developers can split the process here, batch them into PRM for inference, and re
 
 ## ORM (Outcome Reward Model)
 
-An example can be found [here](https://github.com/modelscope/swift/blob/main/swift/plugin/orm.py).
+An example can be found [here](https://github.com/modelscope/ms-swift/blob/main/swift/plugin/orm.py).
 
 ORM stands for Outcome Reward Model. ORM typically uses regular expressions to determine whether a response is correct. For example:
 

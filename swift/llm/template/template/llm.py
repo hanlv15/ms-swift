@@ -1,12 +1,16 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
 
-from ..constant import LLMTemplateType
+from ..base import Template
+from ..constant import LLMTemplateType, MLLMTemplateType
 from ..register import TemplateMeta, register_template
+from ..template_inputs import StdTemplateInputs
 from ..utils import Prompt
 from .llama import Llama3_2TemplateMeta
-from .utils import DEFAULT_SYSTEM, ChatmlTemplateMeta
+from .qwen import Qwen2VLTemplate, QwenTemplateMeta
+from .utils import DEFAULT_SYSTEM, ChatmlTemplateMeta, ThinkingWithAnswerTemplate
 
 register_template(
     TemplateMeta(
@@ -28,6 +32,10 @@ register_template(
         system_prefix=[' \n\n<|system|>:{{SYSTEM}}'],
         default_system=DEFAULT_SYSTEM,
     ))
+
+register_template(QwenTemplateMeta(MLLMTemplateType.qwen2_gme, template_cls=Qwen2VLTemplate, suffix=['<|endoftext|>']))
+register_template(
+    TemplateMeta(LLMTemplateType.qwen3_emb, suffix=['<|endoftext|>'], prefix=[], chat_sep=[], prompt=['{{QUERY}}']))
 
 register_template(
     TemplateMeta(LLMTemplateType.baichuan, prefix=['{{SYSTEM}}'], prompt=[[195], '{{QUERY}}', [196]], chat_sep=[]))
@@ -59,10 +67,12 @@ register_template(
         chat_sep=['</s>[INST] '],
         suffix=['</s>']))
 
+today = datetime.now().strftime('%Y-%m-%d')
+
 mistral_2501_system = (
     'You are Mistral Small 3, a Large Language Model (LLM) created by Mistral AI, a French startup '
     'headquartered in Paris.\n'
-    'Your knowledge base was last updated on 2023-10-01. The current date is 2025-02-07.\n\n'
+    f'Your knowledge base was last updated on 2023-10-01. The current date is {today}.\n\n'
     "When you're not sure about some information, you say that you don't have the information and don't "
     'make up anything.\n'
     "If the user's question is not clear, ambiguous, or does not provide enough context for you to accurately answer "
@@ -259,21 +269,91 @@ register_template(
 
 register_template(
     TemplateMeta(
-        LLMTemplateType.moonlight,
-        prefix=[],
-        system_prefix=['<|im_system|>system<|im_middle|>{{SYSTEM}}<|im_end|>'],
-        prompt=['<|im_user|>user<|im_middle|>{{QUERY}}<|im_end|><|im_assistant|>assistant<|im_middle|>'],
-        chat_sep=['<|im_end|>'],
-        suffix=['<|im_end|>'],
-        default_system='You are a helpful assistant',
-    ))
-
-register_template(
-    TemplateMeta(
         LLMTemplateType.ling,
         prefix=[],
         system_prefix=['<role>SYSTEM</role>{{SYSTEM}}'],
         prompt=['<role>HUMAN</role>{{QUERY}}<role>ASSISTANT</role>'],
         chat_sep=[],
         suffix=['<|endoftext|>'],
+    ))
+
+register_template(
+    QwenTemplateMeta(
+        LLMTemplateType.mimo_rl,
+        default_system='You are MiMo, an AI assistant developed by Xiaomi.',
+    ))
+
+register_template(
+    TemplateMeta(
+        LLMTemplateType.dots1,
+        prefix=['<|system|>{{SYSTEM}}<|endofsystem|>'],
+        prompt=['<|userprompt|>{{QUERY}}<|endofuserprompt|><|response|>'],
+        chat_sep=['<|endofresponse|>'],
+        suffix=['<|endofresponse|>'],
+        default_system='You are a helpful assistant.',
+    ))
+
+register_template(
+    TemplateMeta(
+        LLMTemplateType.hunyuan_moe,
+        prefix=['<|startoftext|>'],
+        system_prefix=['<|startoftext|>{{SYSTEM}}<|extra_4|>'],
+        prompt=['{{QUERY}}<|extra_0|>'],
+        chat_sep=['<|eos|><|startoftext|>'],
+        suffix=['<|eos|>'],
+    ))
+
+register_template(
+    TemplateMeta(
+        LLMTemplateType.hunyuan,
+        prefix=['<｜hy_begin▁of▁sentence｜>'],
+        system_prefix=['<｜hy_begin▁of▁sentence｜>{{SYSTEM}}<｜hy_place▁holder▁no▁3｜>'],
+        prompt=['<｜hy_User｜>{{QUERY}}<｜hy_Assistant｜>'],
+        chat_sep=['<｜hy_place▁holder▁no▁2｜>'],
+        suffix=['<｜hy_place▁holder▁no▁2｜>'],
+        template_cls=ThinkingWithAnswerTemplate,
+        agent_template='hunyuan_hermes'))
+
+
+class GptTemplate(Template):
+
+    def _get_gpt_oss_prefix(self):
+        today = datetime.now().strftime('%Y-%m-%d')
+        return ('<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\n'
+                f'Knowledge cutoff: 2024-06\nCurrent date: {today}\n\nReasoning: medium\n\n'
+                '# Valid channels: analysis, commentary, final. '
+                'Channel must be included for every message.<|end|>')
+
+    def _swift_prepare_inputs(self, inputs: StdTemplateInputs):
+        super()._swift_prepare_inputs(inputs)
+        messages = inputs.messages
+        if inputs.system is None:
+            inputs.system = self._get_gpt_oss_prefix()
+        elif not inputs.system.startswith('<|start|>'):
+            inputs.system = self._get_gpt_oss_prefix() + (
+                f'<|start|>developer<|message|># Instructions\n\n{inputs.system}<|end|>')
+        for i, message in enumerate(messages):
+            if message['role'] == 'assistant' and isinstance(message['content'], str):
+                if not message['content'].startswith('<|channel|>'):
+                    message['content'] = '<|channel|>final<|message|>' + message['content']
+
+
+@dataclass
+class GptOssTemplateMeta(TemplateMeta):
+    prefix: Prompt = field(default_factory=lambda: ['{{SYSTEM}}'])
+    prompt: Prompt = field(default_factory=lambda: ['<|start|>user<|message|>{{QUERY}}<|end|><|start|>assistant'])
+    chat_sep: Optional[Prompt] = field(default_factory=lambda: ['<|end|>'])
+    suffix: Prompt = field(default_factory=lambda: ['<|return|>'])
+
+
+register_template(GptOssTemplateMeta(LLMTemplateType.gpt_oss, template_cls=GptTemplate))
+
+register_template(
+    TemplateMeta(
+        LLMTemplateType.longchat,
+        prefix=[],
+        system_prefix=['SYSTEM:{{SYSTEM}}'],
+        prompt=[' [Round {{ROUND0}}] USER:{{QUERY}} ASSISTANT:'],
+        chat_sep=['</longcat_s>'],
+        suffix=['</longcat_s>'],
     ))

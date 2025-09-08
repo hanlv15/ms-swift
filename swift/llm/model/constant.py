@@ -12,6 +12,13 @@ class LLMModelType:
     qwen2_moe = 'qwen2_moe'
     qwq_preview = 'qwq_preview'
     qwq = 'qwq'
+    qwen3 = 'qwen3'
+    qwen3_thinking = 'qwen3_thinking'
+    qwen3_nothinking = 'qwen3_nothinking'
+    qwen3_moe = 'qwen3_moe'
+    qwen3_moe_thinking = 'qwen3_moe_thinking'
+    qwen3_emb = 'qwen3_emb'
+    qwen3_reranker = 'qwen3_reranker'
 
     qwen2_gte = 'qwen2_gte'
 
@@ -28,6 +35,8 @@ class LLMModelType:
     yi = 'yi'
     yi_coder = 'yi_coder'
     sus = 'sus'
+    gpt_oss = 'gpt_oss'
+    seed_oss = 'seed_oss'
 
     codefuse_codellama = 'codefuse_codellama'
     mengzi3 = 'mengzi3'
@@ -38,6 +47,10 @@ class LLMModelType:
     chatglm2 = 'chatglm2'
     chatglm3 = 'chatglm3'
     glm4 = 'glm4'
+    glm4_0414 = 'glm4_0414'
+    glm4_5 = 'glm4_5'
+    glm4_z1_rumination = 'glm4_z1_rumination'
+
     glm_edge = 'glm_edge'
     codefuse_codegeex2 = 'codefuse_codegeex2'
     codegeex4 = 'codegeex4'
@@ -53,6 +66,7 @@ class LLMModelType:
     deepseek_v2_5 = 'deepseek_v2_5'
     deepseek_r1 = 'deepseek_r1'
     deepseek_r1_distill = 'deepseek_r1_distill'
+    deepseek_v3_1 = 'deepseek_v3_1'
 
     openbuddy_llama = 'openbuddy_llama'
     openbuddy_llama3 = 'openbuddy_llama3'
@@ -72,6 +86,7 @@ class LLMModelType:
     telechat2 = 'telechat2'
 
     mistral = 'mistral'
+    devstral = 'devstral'
     zephyr = 'zephyr'
     mixtral = 'mixtral'
     mistral_nemo = 'mistral_nemo'
@@ -86,9 +101,11 @@ class LLMModelType:
     phi4 = 'phi4'
 
     minimax = 'minimax'
+    minimax_m1 = 'minimax_m1'
 
     gemma = 'gemma'
     gemma2 = 'gemma2'
+    gemma3_text = 'gemma3_text'
 
     skywork = 'skywork'
     skywork_o1 = 'skywork_o1'
@@ -107,11 +124,19 @@ class LLMModelType:
     polylm = 'polylm'
     aya = 'aya'
     moonlight = 'moonlight'
+    mimo = 'mimo'
+    mimo_rl = 'mimo_rl'
+    dots1 = 'dots1'
+    hunyuan_moe = 'hunyuan_moe'
+    hunyuan = 'hunyuan'
+    ernie = 'ernie'
+    longchat = 'longchat'
 
 
 class BertModelType:
     modern_bert = 'modern_bert'
     modern_bert_gte = 'modern_bert_gte'
+    modern_bert_gte_reranker = 'modern_bert_gte_reranker'
     bert = 'bert'
 
 
@@ -129,13 +154,20 @@ class MLLMModelType:
     qwen_audio = 'qwen_audio'
     qwen2_vl = 'qwen2_vl'
     qwen2_5_vl = 'qwen2_5_vl'
+    qwen2_5_omni = 'qwen2_5_omni'
     qwen2_audio = 'qwen2_audio'
     qvq = 'qvq'
+    qwen2_gme = 'qwen2_gme'
     ovis1_6 = 'ovis1_6'
     ovis1_6_llama3 = 'ovis1_6_llama3'
     ovis2 = 'ovis2'
+    ovis2_5 = 'ovis2_5'
+    mimo_vl = 'mimo_vl'
+    midashenglm = 'midashenglm'
 
     glm4v = 'glm4v'
+    glm4_1v = 'glm4_1v'
+    glm4_5v = 'glm4_5v'
     glm_edge_v = 'glm_edge_v'
     cogvlm = 'cogvlm'
     cogagent_vqa = 'cogagent_vqa'
@@ -148,12 +180,17 @@ class MLLMModelType:
     internvl2 = 'internvl2'
     internvl2_phi3 = 'internvl2_phi3'
     internvl2_5 = 'internvl2_5'
+    internvl3 = 'internvl3'
+    internvl3_5 = 'internvl3_5'
+    internvl3_5_gpt = 'internvl3_5_gpt'
+    interns1 = 'interns1'
     xcomposer2 = 'xcomposer2'
     xcomposer2_4khd = 'xcomposer2_4khd'
     xcomposer2_5 = 'xcomposer2_5'
     xcomposer2_5_ol_audio = 'xcomposer2_5_ol_audio'
 
     llama3_2_vision = 'llama3_2_vision'
+    llama4 = 'llama4'
     llama3_1_omni = 'llama3_1_omni'
 
     llava1_5_hf = 'llava1_5_hf'
@@ -184,6 +221,8 @@ class MLLMModelType:
     minicpmv2_5 = 'minicpmv2_5'
     minicpmv2_6 = 'minicpmv2_6'
     minicpmo2_6 = 'minicpmo2_6'
+    minicpmv4 = 'minicpmv4'
+    minicpmv4_5 = 'minicpmv4_5'
 
     minimax_vl = 'minimax_vl'
 
@@ -198,6 +237,9 @@ class MLLMModelType:
     got_ocr2 = 'got_ocr2'
     got_ocr2_hf = 'got_ocr2_hf'
     step_audio = 'step_audio'
+    kimi_vl = 'kimi_vl'
+    keye_vl = 'keye_vl'
+    dots_ocr = 'dots_ocr'
 
     phi3_vision = 'phi3_vision'
     phi4_multimodal = 'phi4_multimodal'
@@ -209,6 +251,9 @@ class MLLMModelType:
     pixtral = 'pixtral'
     megrez_omni = 'megrez_omni'
     valley = 'valley'
+    gemma3_vision = 'gemma3_vision'
+    gemma3n = 'gemma3n'
+    mistral_2503 = 'mistral_2503'
 
 
 class ModelType(LLMModelType, MLLMModelType, BertModelType, RMModelType):

@@ -62,7 +62,8 @@ def get_model_tokenizer_phi4_multimodal(*args, **kwargs):
     del processor.audio_processor.padding_value
     del processor.__class__.chat_template
     processor.chat_template = None
-    model.set_lora_adapter(['vision', 'speech'])
+    if model is not None:
+        model.set_lora_adapter(['vision', 'speech'])
     return model, processor
 
 
@@ -194,7 +195,7 @@ register_model(
                 Model('LLM-Research/Phi-3-medium-128k-instruct', 'microsoft/Phi-3-medium-128k-instruct'),
                 Model('LLM-Research/Phi-3.5-mini-instruct', 'microsoft/Phi-3.5-mini-instruct'),
             ]),
-            ModelGroup(Model('LLM-Research/Phi-4-mini-instruct', 'microsoft/Phi-4-mini-instruct'))
+            ModelGroup([Model('LLM-Research/Phi-4-mini-instruct', 'microsoft/Phi-4-mini-instruct')])
         ],
         TemplateType.phi3,
         get_model_tokenizer_with_flash_attn,

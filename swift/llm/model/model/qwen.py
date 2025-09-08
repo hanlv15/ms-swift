@@ -1,8 +1,9 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
+import os
 from typing import Any, Dict, Optional, Tuple, Type
 
 import torch
-from transformers import AutoConfig, BitsAndBytesConfig, PreTrainedTokenizerBase
+from transformers import AutoConfig, AutoTokenizer, BitsAndBytesConfig, PreTrainedTokenizerBase
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.models.auto.tokenization_auto import get_tokenizer_config
 
@@ -10,7 +11,7 @@ from swift.llm import TemplateType
 from swift.utils import get_device_count, get_dist_setting, get_env_args, get_logger
 from ..constant import LLMModelType, MLLMModelType, RMModelType
 from ..model_arch import ModelArch
-from ..patcher import patch_fixed_device, patch_output_clone, patch_output_to_input_device
+from ..patcher import patch_fixed_device, patch_get_input_embeddings, patch_output_clone
 from ..register import (Model, ModelGroup, ModelMeta, get_model_tokenizer_multimodal, get_model_tokenizer_reward_model,
                         get_model_tokenizer_with_flash_attn, register_model)
 from ..utils import AttnImpl, ModelInfo, use_submodel_func
@@ -39,6 +40,12 @@ def get_model_tokenizer_qwen(model_dir: str,
     use_flash_attn = AttnImpl.to_use_flash_attn(kwargs.pop('attn_impl', None), 'auto')
     model_config.use_flash_attn = use_flash_attn
     kwargs['model_config'] = model_config
+    tokenizer = kwargs.get('tokenizer')
+    if tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+    if tokenizer.eos_token_id is None:
+        tokenizer.eos_token_id = tokenizer.eod_id
+    kwargs['tokenizer'] = tokenizer
     model, tokenizer = get_model_tokenizer_with_flash_attn(model_dir, model_info, model_kwargs, load_model, **kwargs)
     try:
         # fix mp+ddp bug
@@ -46,8 +53,6 @@ def get_model_tokenizer_qwen(model_dir: str,
         logger.info('registered_causal_mask to cuda')
     except AttributeError:
         pass
-    if tokenizer.eos_token_id is None:
-        tokenizer.eos_token_id = tokenizer.eod_id
     return model, tokenizer
 
 
@@ -435,7 +440,10 @@ register_model(
                     Model('Qwen/Qwen2.5-Coder-32B-Instruct-GPTQ-Int4', 'Qwen/Qwen2.5-Coder-32B-Instruct-GPTQ-Int4'),
                     Model('Qwen/Qwen2.5-Coder-32B-Instruct-GPTQ-Int8', 'Qwen/Qwen2.5-Coder-32B-Instruct-GPTQ-Int8'),
                 ],
-                tags=['coding'])
+                tags=['coding']),
+            ModelGroup([
+                Model('moonshotai/Kimi-Dev-72B', 'moonshotai/Kimi-Dev-72B'),
+            ]),
         ],
         TemplateType.qwen2_5,
         get_model_tokenizer_with_flash_attn,
@@ -487,20 +495,148 @@ register_model(
         get_model_tokenizer_with_flash_attn,
         architectures=['Qwen2MoeForCausalLM'],
         requires=['transformers>=4.40'],
+    ))
+
+register_model(
+    ModelMeta(
+        LLMModelType.qwen3,
+        [
+            ModelGroup([
+                Model('Qwen/Qwen3-0.6B-Base', 'Qwen/Qwen3-0.6B-Base'),
+                Model('Qwen/Qwen3-1.7B-Base', 'Qwen/Qwen3-1.7B-Base'),
+                Model('Qwen/Qwen3-4B-Base', 'Qwen/Qwen3-4B-Base'),
+                Model('Qwen/Qwen3-8B-Base', 'Qwen/Qwen3-8B-Base'),
+                Model('Qwen/Qwen3-14B-Base', 'Qwen/Qwen3-14B-Base'),
+                # instruct
+                Model('Qwen/Qwen3-0.6B', 'Qwen/Qwen3-0.6B'),
+                Model('Qwen/Qwen3-1.7B', 'Qwen/Qwen3-1.7B'),
+                Model('Qwen/Qwen3-4B', 'Qwen/Qwen3-4B'),
+                Model('Qwen/Qwen3-8B', 'Qwen/Qwen3-8B'),
+                Model('Qwen/Qwen3-14B', 'Qwen/Qwen3-14B'),
+                Model('Qwen/Qwen3-32B', 'Qwen/Qwen3-32B'),
+                # fp8
+                Model('Qwen/Qwen3-0.6B-FP8', 'Qwen/Qwen3-0.6B-FP8'),
+                Model('Qwen/Qwen3-1.7B-FP8', 'Qwen/Qwen3-1.7B-FP8'),
+                Model('Qwen/Qwen3-4B-FP8', 'Qwen/Qwen3-4B-FP8'),
+                Model('Qwen/Qwen3-8B-FP8', 'Qwen/Qwen3-8B-FP8'),
+                Model('Qwen/Qwen3-14B-FP8', 'Qwen/Qwen3-14B-FP8'),
+                Model('Qwen/Qwen3-32B-FP8', 'Qwen/Qwen3-32B-FP8'),
+                # awq
+                Model('Qwen/Qwen3-4B-AWQ', 'Qwen/Qwen3-4B-AWQ'),
+                Model('Qwen/Qwen3-8B-AWQ', 'Qwen/Qwen3-8B-AWQ'),
+                Model('Qwen/Qwen3-14B-AWQ', 'Qwen/Qwen3-14B-AWQ'),
+                Model('Qwen/Qwen3-32B-AWQ', 'Qwen/Qwen3-32B-AWQ'),
+                # swift
+                Model('swift/Qwen3-32B-AWQ'),
+            ]),
+        ],
+        TemplateType.qwen3,
+        get_model_tokenizer_with_flash_attn,
+        architectures=['Qwen3ForCausalLM'],
+        requires=['transformers>=4.51'],
         model_arch=ModelArch.llama))
 
+register_model(
+    ModelMeta(
+        LLMModelType.qwen3_moe,
+        [
+            ModelGroup([
+                Model('Qwen/Qwen3-30B-A3B-Base', 'Qwen/Qwen3-30B-A3B-Base'),
+                # instruct
+                Model('Qwen/Qwen3-30B-A3B', 'Qwen/Qwen3-30B-A3B'),
+                Model('Qwen/Qwen3-235B-A22B', 'Qwen/Qwen3-235B-A22B'),
+                # fp8
+                Model('Qwen/Qwen3-30B-A3B-FP8', 'Qwen/Qwen3-30B-A3B-FP8'),
+                Model('Qwen/Qwen3-235B-A22B-FP8', 'Qwen/Qwen3-235B-A22B-FP8'),
+                # awq
+                Model('swift/Qwen3-30B-A3B-AWQ', 'cognitivecomputations/Qwen3-30B-A3B-AWQ'),
+                Model('swift/Qwen3-235B-A22B-AWQ', 'cognitivecomputations/Qwen3-235B-A22B-AWQ'),
+            ]),
+        ],
+        TemplateType.qwen3,
+        get_model_tokenizer_with_flash_attn,
+        architectures=['Qwen3MoeForCausalLM'],
+        requires=['transformers>=4.51'],
+    ))
 
-def patch_qwen_vl_utils():
-    from qwen_vl_utils import vision_process
+register_model(
+    ModelMeta(
+        LLMModelType.qwen3_thinking,
+        [
+            ModelGroup([
+                Model('Qwen/Qwen3-4B-Thinking-2507', 'Qwen/Qwen3-4B-Thinking-2507'),
+                Model('Qwen/Qwen3-4B-Thinking-2507-FP8', 'Qwen/Qwen3-4B-Thinking-2507-FP8'),
+            ]),
+        ],
+        TemplateType.qwen3_thinking,
+        get_model_tokenizer_with_flash_attn,
+        architectures=['Qwen3ForCausalLM'],
+        requires=['transformers>=4.51'],
+    ))
+
+register_model(
+    ModelMeta(
+        LLMModelType.qwen3_nothinking,
+        [
+            ModelGroup([
+                Model('Qwen/Qwen3-30B-A3B-Instruct-2507', 'Qwen/Qwen3-30B-A3B-Instruct-2507'),
+                Model('Qwen/Qwen3-30B-A3B-Instruct-2507-FP8', 'Qwen/Qwen3-30B-A3B-Instruct-2507-FP8'),
+                Model('Qwen/Qwen3-235B-A22B-Instruct-2507', 'Qwen/Qwen3-235B-A22B-Instruct-2507'),
+                Model('Qwen/Qwen3-235B-A22B-Instruct-2507-FP8', 'Qwen/Qwen3-235B-A22B-Instruct-2507-FP8'),
+                # awq
+                Model('swift/Qwen3-235B-A22B-Instruct-2507-AWQ'),
+            ]),
+            ModelGroup([
+                Model('Qwen/Qwen3-Coder-30B-A3B-Instruct', 'Qwen/Qwen3-Coder-30B-A3B-Instruct'),
+                Model('Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8', 'Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8'),
+                Model('Qwen/Qwen3-Coder-480B-A35B-Instruct', 'Qwen/Qwen3-Coder-480B-A35B-Instruct'),
+                Model('Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8', 'Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8'),
+                Model('swift/Qwen3-Coder-480B-A35B-Instruct-AWQ'),
+            ],
+                       tags=['coding']),
+            ModelGroup([
+                Model('Qwen/Qwen3-4B-Instruct-2507', 'Qwen/Qwen3-4B-Instruct-2507'),
+                Model('Qwen/Qwen3-4B-Instruct-2507-FP8', 'Qwen/Qwen3-4B-Instruct-2507-FP8'),
+            ])
+        ],
+        TemplateType.qwen3_nothinking,
+        get_model_tokenizer_with_flash_attn,
+        architectures=['Qwen3MoeForCausalLM', 'Qwen3ForCausalLM'],
+        requires=['transformers>=4.51'],
+    ))
+
+register_model(
+    ModelMeta(
+        LLMModelType.qwen3_moe_thinking,
+        [
+            ModelGroup([
+                Model('Qwen/Qwen3-30B-A3B-Thinking-2507', 'Qwen/Qwen3-30B-A3B-Thinking-2507'),
+                Model('Qwen/Qwen3-30B-A3B-Thinking-2507-FP8', 'Qwen/Qwen3-30B-A3B-Thinking-2507-FP8'),
+                Model('Qwen/Qwen3-235B-A22B-Thinking-2507', 'Qwen/Qwen3-235B-A22B-Thinking-2507'),
+                Model('Qwen/Qwen3-235B-A22B-Thinking-2507-FP8', 'Qwen/Qwen3-235B-A22B-Thinking-2507-FP8'),
+                # awq
+                Model('swift/Qwen3-235B-A22B-Thinking-2507-AWQ'),
+            ]),
+        ],
+        TemplateType.qwen3_thinking,
+        get_model_tokenizer_with_flash_attn,
+        architectures=['Qwen3MoeForCausalLM'],
+        requires=['transformers>=4.51'],
+    ))
+
+
+def patch_qwen_vl_utils(vision_process):
     if hasattr(vision_process, '_patch'):
         return
+    if os.getenv('VIDEO_MAX_PIXELS') and not os.getenv('VIDEO_TOTAL_PIXELS'):
+        # https://github.com/QwenLM/Qwen2.5-VL/issues/1120
+        os.environ['VIDEO_TOTAL_PIXELS'] = str(int(128000 * 28 * 28 * 0.9))
     for key in [
             'image_factor', 'min_pixels', 'max_pixels', 'max_ratio', 'video_min_pixels', 'video_max_pixels',
             'video_total_pixels', 'frame_factor', 'fps', 'fps_min_frames', 'fps_max_frames'
     ]:
         type_func = float if key == 'fps' else int
         setattr(vision_process, key.upper(), get_env_args(key, type_func, getattr(vision_process, key.upper())))
-    from qwen_vl_utils import vision_process
     _read_video_decord = vision_process._read_video_decord
 
     def _new_read_video_decord(ele: dict):
@@ -516,11 +652,12 @@ def get_model_tokenizer_qwen2_vl(*args, **kwargs):
     from transformers import Qwen2VLForConditionalGeneration
     kwargs['automodel_class'] = kwargs['automodel_class'] or Qwen2VLForConditionalGeneration
     model, tokenizer = get_model_tokenizer_multimodal(*args, **kwargs)
-    if model is not None and hasattr(model.model, 'embed_tokens'):
-        patch_output_clone(model.model.embed_tokens)
-        patch_output_to_input_device(model.model.embed_tokens)
+    if model is not None:
+        base_model = model.model if 'AWQ' in model.__class__.__name__ else model
+        patch_get_input_embeddings(base_model.visual, 'patch_embed')
 
-    patch_qwen_vl_utils()
+    from qwen_vl_utils import vision_process
+    patch_qwen_vl_utils(vision_process)
     return model, tokenizer
 
 
@@ -596,11 +733,13 @@ register_model(
             ModelGroup([
                 Model('Qwen/Qwen2.5-VL-3B-Instruct', 'Qwen/Qwen2.5-VL-3B-Instruct'),
                 Model('Qwen/Qwen2.5-VL-7B-Instruct', 'Qwen/Qwen2.5-VL-7B-Instruct'),
+                Model('Qwen/Qwen2.5-VL-32B-Instruct', 'Qwen/Qwen2.5-VL-32B-Instruct'),
                 Model('Qwen/Qwen2.5-VL-72B-Instruct', 'Qwen/Qwen2.5-VL-72B-Instruct'),
             ]),
             ModelGroup([
                 Model('Qwen/Qwen2.5-VL-3B-Instruct-AWQ', 'Qwen/Qwen2.5-VL-3B-Instruct-AWQ'),
                 Model('Qwen/Qwen2.5-VL-7B-Instruct-AWQ', 'Qwen/Qwen2.5-VL-7B-Instruct-AWQ'),
+                Model('Qwen/Qwen2.5-VL-32B-Instruct-AWQ', 'Qwen/Qwen2.5-VL-32B-Instruct-AWQ'),
                 Model('Qwen/Qwen2.5-VL-72B-Instruct-AWQ', 'Qwen/Qwen2.5-VL-72B-Instruct-AWQ'),
             ]),
         ],
@@ -610,6 +749,83 @@ register_model(
         architectures=['Qwen2_5_VLForConditionalGeneration'],
         requires=['transformers>=4.49', 'qwen_vl_utils>=0.0.6', 'decord'],
         tags=['vision', 'video']))
+
+register_model(
+    ModelMeta(
+        MLLMModelType.mimo_vl, [
+            ModelGroup([
+                Model('XiaomiMiMo/MiMo-VL-7B-SFT', 'XiaomiMiMo/MiMo-VL-7B-SFT'),
+                Model('XiaomiMiMo/MiMo-VL-7B-RL', 'XiaomiMiMo/MiMo-VL-7B-RL'),
+            ])
+        ],
+        TemplateType.mimo_vl,
+        get_model_tokenizer_qwen2_5_vl,
+        model_arch=ModelArch.qwen2_vl,
+        architectures=['Qwen2_5_VLForConditionalGeneration'],
+        requires=['transformers>=4.49', 'qwen_vl_utils>=0.0.6', 'decord'],
+        tags=['vision', 'video']))
+
+
+def get_model_tokenizer_qwen2_5_omni(model_dir, *args, **kwargs):
+    from transformers import Qwen2_5OmniForConditionalGeneration, Qwen2_5OmniProcessor, Qwen2_5OmniConfig
+    from qwen_omni_utils import vision_process
+    kwargs['automodel_class'] = kwargs['automodel_class'] or Qwen2_5OmniForConditionalGeneration
+    processor = Qwen2_5OmniProcessor.from_pretrained(model_dir, trust_remote_code=True)
+    kwargs['tokenizer'] = processor.tokenizer
+    kwargs['model_config'] = Qwen2_5OmniConfig.from_pretrained(model_dir, trust_remote_code=True)
+    patch_qwen_vl_utils(vision_process)
+    kwargs['model_config'].enable_audio_output = get_env_args('ENABLE_AUDIO_OUTPUT', bool, True)
+    model, _ = get_model_tokenizer_with_flash_attn(model_dir, *args, **kwargs)
+    if model:
+        base_model = model.model if 'AWQ' in model.__class__.__name__ else model
+        use_submodel_func(base_model, 'thinker')
+        base_model.config.keys_to_ignore_at_inference += ['hidden_states', 'attention_mask']
+        base_model.config.talker_config.pad_token_id = None
+        patch_get_input_embeddings(base_model.thinker.visual, 'patch_embed')
+    return model, processor
+
+
+register_model(
+    ModelMeta(
+        MLLMModelType.qwen2_5_omni,
+        [
+            ModelGroup([
+                Model('Qwen/Qwen2.5-Omni-3B', 'Qwen/Qwen2.5-Omni-3B'),
+                Model('Qwen/Qwen2.5-Omni-7B', 'Qwen/Qwen2.5-Omni-7B'),
+            ]),
+        ],
+        TemplateType.qwen2_5_omni,
+        get_model_tokenizer_qwen2_5_omni,
+        model_arch=ModelArch.qwen2_5_omni,
+        architectures=['Qwen2_5OmniModel', 'Qwen2_5OmniForConditionalGeneration'],
+        requires=['transformers>=4.50', 'soundfile', 'qwen_omni_utils', 'decord'],
+        tags=['vision', 'video', 'audio'],
+        additional_saved_files=['spk_dict.pt'],
+        ignore_patterns=[],
+    ))
+
+
+def get_model_tokenizer_midashenglm(*args, **kwargs):
+    model, tokenizer = get_model_tokenizer_multimodal(*args, **kwargs)
+    if model is not None:
+        model.audio_encoder.float()
+        patch_output_clone(model.decoder.model.embed_tokens)
+    return model, tokenizer
+
+
+register_model(
+    ModelMeta(
+        MLLMModelType.midashenglm,
+        [ModelGroup([
+            Model('mispeech/midashenglm-7b', 'mispeech/midashenglm-7b'),
+        ])],
+        TemplateType.midashenglm,
+        get_model_tokenizer_midashenglm,
+        model_arch=ModelArch.midashenglm,
+        architectures=['MiDashengLMModel'],
+        requires=['transformers>=4.52', 'soundfile'],
+        tags=['audio'],
+    ))
 
 
 def get_model_tokenizer_qwen2_audio(*args, **kwargs):
@@ -631,7 +847,7 @@ register_model(
         get_model_tokenizer_qwen2_audio,
         model_arch=ModelArch.qwen2_audio,
         architectures=['Qwen2AudioForConditionalGeneration'],
-        requires=['transformers>=4.45', 'librosa'],
+        requires=['transformers>=4.45,<4.49', 'librosa'],
         tags=['audio'],
     ))
 
@@ -670,14 +886,21 @@ register_model(
 def get_model_tokenizer_ovis(*args, **kwargs):
     kwargs['attn_impl_keys'] = ['llm_attn_implementation']
     model, tokenizer = get_model_tokenizer_with_flash_attn(*args, **kwargs)
-    model.visual_tokenizer.to(model.dtype)
-    model.vte.to(model.dtype)
     if model is not None:
+        model.visual_tokenizer.to(model.dtype)
+        model.vte.to(model.dtype)
+
         model.generation_config.cache_implementation = None
         func_list = ['generate', 'forward', 'get_input_embeddings']
         use_submodel_func(model, 'llm', func_list)
         embedding = model.get_input_embeddings()
         patch_output_clone(embedding)
+        if hasattr(model.visual_tokenizer, 'backbone'):
+            backbone = model.visual_tokenizer.backbone
+            if hasattr(backbone, 'vision_model'):
+                patch_get_input_embeddings(model.visual_tokenizer, 'backbone.vision_model.embeddings')
+            elif hasattr(backbone, 'preprocessor'):
+                patch_get_input_embeddings(model.visual_tokenizer, 'backbone.preprocessor.patchifier')
     try:
         # fix device_map
         from transformers.cache_utils import HybridCache
@@ -708,7 +931,7 @@ register_model(
         ],
         TemplateType.ovis1_6,
         get_model_tokenizer_ovis,
-        model_arch=ModelArch.ovis1_6,
+        model_arch=ModelArch.ovis,
         architectures=['Ovis'],
         tags=['vision'],
         requires=['transformers>=4.42'],
@@ -724,7 +947,7 @@ register_model(
         ],
         TemplateType.ovis1_6_llama3,
         get_model_tokenizer_ovis,
-        model_arch=ModelArch.ovis1_6,
+        model_arch=ModelArch.ovis,
         architectures=['Ovis'],
         tags=['vision'],
     ))
@@ -744,7 +967,40 @@ register_model(
         ],
         TemplateType.ovis2,
         get_model_tokenizer_ovis,
-        model_arch=ModelArch.ovis1_6,
+        model_arch=ModelArch.ovis,
+        architectures=['Ovis'],
+        tags=['vision'],
+        requires=['transformers>=4.46.2', 'moviepy<2'],
+    ))
+
+
+def get_model_tokenizer_ovis2_5(*args, **kwargs):
+    model, tokenizer = get_model_tokenizer_with_flash_attn(*args, **kwargs)
+    if model is not None:
+        model.visual_tokenizer.to(model.dtype)
+        model.vte.to(model.dtype)
+
+        func_list = ['generate', 'forward', 'get_input_embeddings']
+        use_submodel_func(model, 'llm', func_list)
+        embedding = model.get_input_embeddings()
+        patch_output_clone(embedding)
+        patch_get_input_embeddings(model.visual_tokenizer.vit, 'vision_model.embeddings.patch_embedding')
+
+    return model, tokenizer
+
+
+register_model(
+    ModelMeta(
+        MLLMModelType.ovis2_5,
+        [
+            ModelGroup([
+                Model('AIDC-AI/Ovis2.5-2B', 'AIDC-AI/Ovis2.5-2B'),
+                Model('AIDC-AI/Ovis2.5-9B', 'AIDC-AI/Ovis2.5-9B'),
+            ]),
+        ],
+        TemplateType.ovis2_5,
+        get_model_tokenizer_ovis2_5,
+        model_arch=ModelArch.ovis2_5,
         architectures=['Ovis'],
         tags=['vision'],
         requires=['transformers>=4.46.2', 'moviepy<2'],
@@ -794,3 +1050,31 @@ register_model(
         architectures=['Qwen2ForRewardModel'],
         requires=['transformers>=4.37'],
     ))
+
+register_model(
+    ModelMeta(
+        LLMModelType.qwen3_emb, [
+            ModelGroup([
+                Model('Qwen/Qwen3-Embedding-0.6B', 'Qwen/Qwen3-Embedding-0.6B'),
+                Model('Qwen/Qwen3-Embedding-4B', 'Qwen/Qwen3-Embedding-4B'),
+                Model('Qwen/Qwen3-Embedding-8B', 'Qwen/Qwen3-Embedding-8B'),
+            ]),
+        ],
+        TemplateType.qwen3_emb,
+        get_model_tokenizer_with_flash_attn,
+        additional_saved_files=['config_sentence_transformers.json', '1_Pooling', 'modules.json'],
+        architectures=['Qwen3ForCausalLM']))
+
+register_model(
+    ModelMeta(
+        LLMModelType.qwen3_reranker, [
+            ModelGroup([
+                Model('Qwen/Qwen3-Reranker-0.6B', 'Qwen/Qwen3-Reranker-0.6B'),
+                Model('Qwen/Qwen3-Reranker-4B', 'Qwen/Qwen3-Reranker-4B'),
+                Model('Qwen/Qwen3-Reranker-8B', 'Qwen/Qwen3-Reranker-8B'),
+            ]),
+        ],
+        TemplateType.qwen3_reranker,
+        get_model_tokenizer_with_flash_attn,
+        architectures=['Qwen3ForCausalLM'],
+        task_type='reranker'))

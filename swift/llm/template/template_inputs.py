@@ -1,6 +1,6 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Dict, List, Optional, Union
 
 import json
@@ -15,22 +15,44 @@ logger = get_logger()
 @dataclass
 class InferRequest:
     """
-    messages: Input in messages format.
-        Examples: [{
-            "role": "user",  # or assistant/system/role
-            "content": [  # str or List[Dict[str, Any]]
-                {
-                    "type": "image",  # or audio/video
-                    "image": "<url/path/base64/PIL.Image>",
-                },
-                {"type": "text", "text": "Please describe the picture."},
-            ],
-        }]
-        The above content is equivalent to:
-        [{"role": "user", "content": "<image>Please describe the picture."}]
-        and additionally passing in images: ["<url/path/base64/PIL.Image>"].
-    tools: Organize tools into the format of tools_prompt for system. for example, 'react_en'.
-        Specifying this parameter will override system.
+    Data structure for inference requests.
+
+    Attributes:
+        messages (Messages):
+            The input conversation in messages format. Each message is a dict containing at least
+            a "role" field (e.g., "user", "assistant", "system") and a "content" field.
+            Example:
+                [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",  # can also be audio/video
+                            "image": "<url/path/base64/PIL.Image>",
+                        },
+                        {"type": "text", "text": "Please describe the picture."},
+                    ],
+                }]
+            The above is equivalent to:
+                [{"role": "user", "content": "<image>Please describe the picture."}]
+            with an additional argument:
+                images = ["<url/path/base64/PIL.Image>"]
+
+        images (List[Union[str, Image.Image]]):
+            Optional, a list of images associated with the request.
+            Each image can be a URL, local path, base64 string, or PIL.Image object.
+
+        audios (List[str]):
+            Optional, a list of audio resources associated with the request.
+
+        videos (List[str]):
+            Optional, a list of video resources associated with the request.
+
+        tools (Optional[List[Tool]]):
+            An optional list of tools. These should be organized in the agent_template format for
+            tools requested by the system, for example 'react_en'.
+
+        objects (Dict[str, List[Any]]):
+            Container for additional multimodal objects, grouped by type (key).
     """
     messages: Messages
 
@@ -75,13 +97,37 @@ class InferRequest:
 
 
 @dataclass
-class TemplateInputs(InferRequest):
-    """The training functionality has been added on top of the InferRequest.
-
-    objects: Used for grounding tasks in a general format.
+class RolloutInferRequest(InferRequest):
     """
-    rejected_response: Optional[str] = None
-    label: Optional[bool] = None
+    An inference request class for rollout scenarios.
+
+    This class extends `InferRequest` and specifically overrides the `images` attribute
+    to be a list of strings for compatibility with POST requests. Each string may
+    represent an image URL or a Base64-encoded image.
+
+    Inherits all fields from `InferRequest`:
+        messages (Messages):
+            Input conversation messages, supporting multimodal content.
+        audios (List[str]):
+            List of audio resources associated with the request.
+        videos (List[str]):
+            List of video resources associated with the request.
+        tools (Optional[List[Tool]]):
+            List of tools, organized by the agent template (e.g. 'react_en').
+        objects (Dict[str, List[Any]]):
+            Optional container for additional multimodal objects.
+
+    Additional / Overridden fields:
+        images (List[str]):
+            List of image resources, each as a string (URL or base64).
+        data_dict (Dict):
+            Optional dictionary for extra request data.
+        uuid (Optional[str]):
+            Optional unique identifier for this request instance.
+    """
+    images: List[str] = field(default_factory=list)
+    data_dict: Dict = field(default_factory=dict)
+    uuid: Optional[str] = None
 
 
 @dataclass
@@ -90,16 +136,21 @@ class StdTemplateInputs:
     messages: List[Dict[str, str]]
     # None: use default system; '': not use system
     system: Optional[str] = None
+    tools: Optional[List[Tool]] = None
 
-    rejected_response: Optional[str] = None
     label: Optional[int] = None
+    channel: Optional[str] = None
 
     images: List[Union[str, Image.Image]] = field(default_factory=list)
-    audios: List[str] = field(default_factory=list)
     videos: List[str] = field(default_factory=list)
+    audios: List[str] = field(default_factory=list)
     objects: Dict[str, List[Any]] = field(default_factory=dict)
 
-    agent_keyword: Optional[Dict[str, str]] = None
+    margin: Optional[float] = None  # for reward modeling
+    mm_processor_kwargs: Dict[str, Any] = field(default_factory=dict)
+    extra_kwargs: Dict[str, Any] = field(default_factory=dict)
+    # compat
+    rejected_response: Optional[List[str]] = None
 
     def __post_init__(self):
         self.image_idx = 0
@@ -113,8 +164,9 @@ class StdTemplateInputs:
             self.videos = [self.videos]
         if self.audios and not isinstance(self.audios, (list, tuple)):
             self.audios = [self.audios]
-        if self.agent_keyword is None:
-            self.agent_keyword = {}
+        if self.rejected_response:
+            assert isinstance(self.rejected_response, list) and all(
+                isinstance(item, str) for item in self.rejected_response)
 
     def to_history(self):
         if not self.messages:
@@ -126,10 +178,10 @@ class StdTemplateInputs:
         return bool(self.images or self.audios or self.videos or self.objects)
 
     @classmethod
-    def from_dict(cls, inputs: Dict[str, Any], *, tools_prompt: str = 'react_en') -> 'StdTemplateInputs':
-        from swift.plugin import get_tools_prompt, get_tools_keyword
+    def from_dict(cls, inputs: Dict[str, Any]) -> 'StdTemplateInputs':
+        inputs = deepcopy(inputs)
         kwargs = {}
-        for key in ['rejected_response', 'label']:
+        for key in ['label', 'channel', 'margin', 'rejected_response']:
             if key in inputs:
                 kwargs[key] = inputs[key]
         messages = inputs['messages']
@@ -142,15 +194,11 @@ class StdTemplateInputs:
         else:
             system = None
 
-        keyword = None
-        if tools is not None:
-            if system is not None:
-                logger.warning_once(
-                    'You have tools prompt but you also have a system field, so the system field will be ignored')
-            if isinstance(tools, str):
-                tools = json.loads(tools)
-            system = get_tools_prompt(tools, tools_prompt)
-            keyword = get_tools_keyword(tools_prompt)
+        for message in messages:
+            if message['role'] == 'tool_response':
+                message['role'] = 'tool'
+            if message['role'] in {'tool_call', 'tool'} and not isinstance(message['content'], str):
+                message['content'] = json.dumps(message['content'], ensure_ascii=False)
 
         media_kwargs = StdTemplateInputs.remove_messages_media(messages)
         for k in list(media_kwargs.keys()):
@@ -165,8 +213,16 @@ class StdTemplateInputs:
             else:
                 media_kwargs[k] = inputs_mm_data
 
-        StdTemplateInputs.messages_join_observation(messages, tools_prompt)
-        return cls(messages=messages, system=system, objects=objects, agent_keyword=keyword, **kwargs, **media_kwargs)
+        all_keys = set(f.name for f in fields(StdTemplateInputs))
+        extra_kwargs = {k: v for k, v in inputs.items() if k not in all_keys}
+        return cls(
+            messages=messages,
+            system=system,
+            tools=tools,
+            objects=objects,
+            extra_kwargs=extra_kwargs,
+            **kwargs,
+            **media_kwargs)
 
     @staticmethod
     def remove_messages_media(messages: Messages) -> Dict[str, Any]:
@@ -174,6 +230,9 @@ class StdTemplateInputs:
         for message in messages:
             content = message['content']
             if isinstance(content, str):
+                continue
+            elif (isinstance(content, list) and content
+                  and isinstance(content[0], int)) or (isinstance(content, dict) and 'token_ids' in content):
                 continue
             # List[Dict[str, Any]]
             new_content = ''
@@ -195,46 +254,94 @@ class StdTemplateInputs:
             message['content'] = new_content
         return res
 
-    @staticmethod
-    def messages_join_observation(messages: Messages, tools_prompt='react_en') -> None:
-        """
-        Joins observations from 'tool' message into the 'assistant' response.
 
-        Example:
-        ---------
-        Original messages:
-        messages = [
-            {'role': 'user', 'content': "What's the weather today in Hangzhou?"},
-            {'role': 'assistant', 'content': 'Action: get_weather\nAction Input:\
-                    [{"location": "Hangzhou"}]\nObservations:'},
-            {'role': 'tool', 'content': 'It is 26 degrees Celsius and sunny in Hangzhou today.'}
-        ]
+@dataclass
+class TemplateInputs:
+    chosen: StdTemplateInputs  # or Dict[str, Any]
+    rejected: Optional[StdTemplateInputs] = None
+    positive: List[StdTemplateInputs] = field(default_factory=list)  # or Dict[str, Any]
+    negative: List[StdTemplateInputs] = field(default_factory=list)
 
-        Transformed messages:
-        messages = [
-            {'role': 'user', 'content': "What's the weather today in Hangzhou?"},
-            {'role': 'assistant', 'content': 'Action: get_weather\nAction Input:\
-                    [{"location": "Hangzhou"}]\nObservations: It is 26 degrees Celsius and sunny in Hangzhou today.'}
-        ]
-        """
-        if len(messages) < 2:
-            return
-        i = 1
-        from swift.plugin import get_tools_keyword
-        keyword = get_tools_keyword(tools_prompt)
-        while i < len(messages):
-            pre_message, message = messages[i - 1], messages[i]
-            pre_role, pre_content = pre_message['role'], pre_message['content']
-            role, content = message['role'], message['content']
-            if (pre_role == 'assistant' and role == 'tool' and isinstance(pre_content, str)
-                    and pre_content.endswith(keyword.get('observation'))):
-                assert isinstance(pre_content, str)
-                pre_message['content'] = pre_content + content  # assistant
-                messages.pop(i)  # remove tool
-            elif (pre_role == 'assistant' and role == 'assistant' and isinstance(pre_content, str)
-                  and isinstance(content, str)):
-                # Consecutive messages from the assistant role need to be merged to prevent errors.
-                pre_message['content'] = pre_content + content
-                messages.pop(i)
+    def __post_init__(self):
+        all_keys = set(f.name for f in fields(StdTemplateInputs))
+        for key in ['chosen', 'rejected', 'positive', 'negative']:
+            value_dict = getattr(self, key, None)
+            if not isinstance(value_dict, dict):
+                continue
+            if key in {'chosen', 'rejected'}:
+                kwargs = {}
+                for k in all_keys:
+                    val = value_dict.get(k)
+                    if val is None:
+                        continue
+                    kwargs[k] = val
+                setattr(self, key, StdTemplateInputs.from_dict(kwargs))
             else:
-                i += 1
+                res = []
+                for i in range(len(value_dict['messages'])):
+                    kwargs = {}
+                    for k in all_keys:
+                        val = value_dict.get(k)
+                        if val is None:
+                            continue
+                        kwargs[k] = val[i]
+                    res.append(StdTemplateInputs.from_dict(kwargs))
+                setattr(self, key, res)
+
+    @staticmethod
+    def _compat_rejected_response(inputs: Dict[str, Any]):
+        if 'rejected_response' not in inputs:
+            return
+        # Find the first round's 'assistant'.
+        messages = inputs['messages']
+        assert len(messages) > 0, f'messages: {messages}'
+        for idx in range(len(messages), 0, -1):
+            message = messages[idx - 1]
+            if message['role'] in {'user', 'tool', 'tool_response'}:
+                break
+
+        rejected_response = inputs.pop('rejected_response')
+        if isinstance(rejected_response, list) and rejected_response and isinstance(rejected_response[0], str):
+            inputs['rejected_response'] = rejected_response
+            return
+        assert isinstance(rejected_response, str), f'rejected_response: {rejected_response}'
+        # Check that the response is different from the rejected_response.
+        if isinstance(rejected_response, str):
+            if len(messages[idx:]) == 1:
+                response = messages[idx]['content']
+                assert rejected_response != response, f'rejected_response: {rejected_response}, response: {response}'
+            rejected_response = [{'role': 'assistant', 'content': rejected_response}]
+        inputs['rejected_messages'] = deepcopy(messages[:idx]) + rejected_response
+
+    @classmethod
+    def from_dict(cls, inputs: Dict[str, Any]) -> 'TemplateInputs':
+        inputs = deepcopy(inputs)
+
+        has_rejected_messages = inputs.get('rejected_messages') is not None
+        cls._compat_rejected_response(inputs)
+        rejected_response = inputs.pop('rejected_response', None)
+        kwargs = {}
+        non_chosen_keys = ['rejected', 'positive', 'negative']
+        for prefix in ['chosen'] + non_chosen_keys:
+            if prefix == 'chosen':
+                std_inputs = {
+                    k: v
+                    for k, v in inputs.items() if not any(k.startswith(f'{p}_') for p in non_chosen_keys)
+                }
+            else:
+                std_inputs = {k[len(f'{prefix}_'):]: v for k, v in inputs.items() if k.startswith(f'{prefix}_')}
+            if std_inputs:
+                kwargs[prefix] = std_inputs
+
+        if not has_rejected_messages and kwargs.get('rejected') is not None:
+            chosen = kwargs['chosen']
+            rejected = kwargs['rejected']
+            # Supplement additional key-value pairs
+            for k, chosen_v in chosen.items():
+                rejected_v = rejected.get(k)
+                if chosen_v is not None and rejected_v is None:
+                    rejected[k] = chosen_v
+        if rejected_response and 'chosen' in kwargs:
+            kwargs['chosen']['rejected_response'] = rejected_response
+
+        return cls(**kwargs)

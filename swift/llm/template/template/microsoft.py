@@ -41,12 +41,12 @@ class FlorenceTemplate(Template):
         encoded = super()._encode(inputs)
         input_ids = encoded['prompt_input_ids']
         images = inputs.images or []
-        labels = encoded['labels']
+        labels = encoded['answer_labels']
         if labels is not None:
             labels = [0] + labels
         if images:
             pixel_values = processor.image_processor(
-                images, return_tensors='pt')['pixel_values'].to(self.config.torch_dtype)
+                images, return_tensors='pt')['pixel_values'].to(self.model_info.torch_dtype)
             encoded['pixel_values'] = pixel_values
         encoded['input_ids'] = input_ids
         encoded['labels'] = labels
@@ -68,8 +68,9 @@ class FlorenceTemplate(Template):
         image_size = None
         if images:
             image_size = (images[0].width, images[0].height)
-        return json.dumps(
-            self.processor.post_process_generation(response, task=template_inputs.query, image_size=image_size))
+        query_before, query_sep, query_after = template_inputs.query.partition('>')
+        task = query_before + query_sep if query_sep else ''
+        return json.dumps(self.processor.post_process_generation(response, task=task, image_size=image_size))
 
 
 register_template(
@@ -153,48 +154,38 @@ class Phi3VisionTemplate(Template):
 
 
 class Phi4MMTemplate(Template):
+    placeholder_tokens = ['<|endoftext10|>', '<|endoftext11|>']
 
     def replace_tag(self, media_type: Literal['image', 'video', 'audio'], index: int,
                     inputs: StdTemplateInputs) -> List[Context]:
         if media_type == 'image':
+            if self.mode == 'vllm':
+                return [f'<|image_{index + 1}|>']  # <|image_1|>
             return [[-100]]
         elif media_type == 'audio':
             import soundfile as sf
             inputs.audios[index] = sf.read(load_file(inputs.audios[index]))
             return [[-200]]
 
-    @staticmethod
-    def _split_list(inputs: List[int], x: int) -> List[List[int]]:
-        idxs = findall(inputs, x)  # '\n'
-        idxs.append(len(inputs))
-        res = []
-        lo = 0
-        for idx in idxs:
-            res.append(inputs[lo:idx])
-            lo = idx + 1
-        return res
-
     def _encode(self, inputs: StdTemplateInputs) -> Dict[str, Any]:
         encoded = super()._encode(inputs)
         input_ids = encoded['input_ids']
         labels = encoded['labels']
+        loss_scale = encoded.get('loss_scale', None)
         images_idx = findall(input_ids, -100)
         audios_idx = findall(input_ids, -200)
         text = '\n'.join(['<|image_1|>'] * len(inputs.images) + ['<|audio_1|>'] * len(inputs.audios))
         new_encoded = self.processor(
             text=text, images=inputs.images or None, audios=inputs.audios or None, return_tensors='pt')
         placeholders = self._split_list(new_encoded.pop('input_ids')[0].tolist(), 198)
-        added_tokens_len = 0
-        for i, idx in enumerate(images_idx + audios_idx):
-            input_ids = input_ids[:idx + added_tokens_len] + placeholders[i] + input_ids[idx + added_tokens_len + 1:]
-            if labels is not None:
-                labels = labels[:idx + added_tokens_len] + [-100] * len(placeholders[i]) + labels[idx + added_tokens_len
-                                                                                                  + 1:]
-            added_tokens_len += len(placeholders[i]) - 1
+
+        def _get_new_tokens(i):
+            return placeholders[i]
+
+        encoded['input_ids'], encoded['labels'], encoded['loss_scale'] = self._extend_tokens(
+            input_ids, labels, loss_scale, images_idx + audios_idx, _get_new_tokens)
         new_encoded.pop('attention_mask')
         encoded.update(new_encoded)
-        encoded['input_ids'] = input_ids
-        encoded['labels'] = labels
         return encoded
 
     def _data_collator(self, batch: List[Dict[str, Any]], *, padding_to: Optional[int] = None) -> Dict[str, Any]:
@@ -212,8 +203,7 @@ class Phi4MMTemplate(Template):
 
 register_template(Phi3TemplateMeta(MLLMTemplateType.phi3_vision, template_cls=Phi3VisionTemplate))
 
-register_template(
-    Phi3TemplateMeta(
-        MLLMTemplateType.phi4_multimodal,
-        template_cls=Phi4MMTemplate,
-        placeholder_tokens=['<|endoftext10|>', '<|endoftext11|>']))
+register_template(Phi3TemplateMeta(
+    MLLMTemplateType.phi4_multimodal,
+    template_cls=Phi4MMTemplate,
+))

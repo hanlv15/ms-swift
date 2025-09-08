@@ -161,6 +161,38 @@ register_model(
 
 register_model(
     ModelMeta(
+        MLLMModelType.minicpmv4,
+        [
+            ModelGroup([
+                Model('OpenBMB/MiniCPM-V-4', 'openbmb/MiniCPM-V-4'),
+            ], ),
+        ],
+        TemplateType.minicpmv4,
+        get_model_tokenizer_minicpmv_2_x,
+        architectures=['MiniCPMV'],
+        model_arch=ModelArch.minicpmv,
+        requires=['timm', 'transformers>=4.36', 'decord'],
+        tags=['vision', 'video'],
+    ))
+
+register_model(
+    ModelMeta(
+        MLLMModelType.minicpmv4_5,
+        [
+            ModelGroup([
+                Model('OpenBMB/MiniCPM-V-4_5', 'openbmb/MiniCPM-V-4_5'),
+            ], ),
+        ],
+        TemplateType.minicpmv4_5,
+        get_model_tokenizer_minicpmv_2_x,
+        architectures=['MiniCPMV'],
+        model_arch=ModelArch.minicpmv,
+        requires=['timm', 'transformers>=4.36', 'decord'],
+        tags=['vision', 'video'],
+    ))
+
+register_model(
+    ModelMeta(
         LLMModelType.minicpm,
         [
             ModelGroup([
@@ -182,6 +214,10 @@ register_model(
         [
             ModelGroup([
                 Model('OpenBMB/MiniCPM-2B-128k', 'openbmb/MiniCPM-2B-128k'),
+            ]),
+            ModelGroup([
+                Model('OpenBMB/MiniCPM4-0.5B', 'openbmb/MiniCPM4-0.5B'),
+                Model('OpenBMB/MiniCPM4-8B', 'openbmb/MiniCPM4-8B'),
             ]),
         ],
         TemplateType.chatml,

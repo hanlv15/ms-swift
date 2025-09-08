@@ -8,7 +8,9 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
+import json
 from PIL import Image
+from pydantic import BaseModel, Field, field_validator
 
 from ..template import InferRequest
 from ..utils import Messages, Tool
@@ -61,6 +63,8 @@ class RequestConfig:
     presence_penalty: float = 0.
     frequency_penalty: float = 0.
     length_penalty: float = 1.
+    # Return token_ids additionally (non-stream)
+    return_details: bool = False
 
     def __post_init__(self):
         if self.stop is None:
@@ -71,6 +75,13 @@ class RequestConfig:
 class CompletionRequestMixin:
     model: str
     prompt: str
+
+
+@dataclass
+class EmbeddingRequestMixin:
+    input: str
+    model: str
+    encoding_format: Literal['float', 'base64'] = 'float'
 
 
 @dataclass
@@ -141,6 +152,23 @@ class CompletionRequest(RequestConfig, MultiModalRequestMixin, CompletionRequest
 
 
 @dataclass
+class EmbeddingRequest(RequestConfig, MultiModalRequestMixin, EmbeddingRequestMixin):
+
+    def __post_init__(self):
+        RequestConfig.__post_init__(self)
+        MultiModalRequestMixin.__post_init__(self)
+
+    def parse(self) -> Tuple['InferRequest', 'RequestConfig']:
+        data = asdict(self)
+        res = []
+        for cls_type in [InferRequest, RequestConfig]:
+            parameters = set(f.name for f in fields(cls_type))
+            _data = {k: v for k, v in data.items() if k in parameters}
+            res.append(cls_type(**_data))
+        return tuple(res)
+
+
+@dataclass
 class ChatCompletionRequest(RequestConfig, MultiModalRequestMixin, ChatCompletionRequestMixin):
 
     def __post_init__(self):
@@ -194,10 +222,15 @@ class ChatCompletionRequest(RequestConfig, MultiModalRequestMixin, ChatCompletio
         return tuple(res)
 
     @classmethod
-    def from_cmpl_request(cls, cmpl_request: CompletionRequest) -> 'ChatCompletionRequest':
+    def from_cmpl_request(cls, cmpl_request: Union[CompletionRequest, EmbeddingRequest]) -> 'ChatCompletionRequest':
         cmpl_request = asdict(cmpl_request)
-        prompt = cmpl_request.pop('prompt')
+        if 'prompt' in cmpl_request:
+            prompt = cmpl_request.pop('prompt')
+        else:
+            prompt = cmpl_request.pop('input')
         cmpl_request['messages'] = [{'role': 'user', 'content': prompt}]
+        if 'encoding_format' in cmpl_request:
+            cmpl_request.pop('encoding_format')
         return cls(**cmpl_request)
 
 
@@ -213,6 +246,12 @@ class Function:
     name: str
     arguments: Optional[str]
 
+    def __post_init__(self):
+        if not isinstance(self.arguments, str):
+            self.arguments = json.dumps(self.arguments)
+        self.name = self.name.strip()
+        self.arguments = self.arguments.strip()
+
 
 @dataclass
 class ChatCompletionMessageToolCall:
@@ -224,8 +263,9 @@ class ChatCompletionMessageToolCall:
 @dataclass
 class ChatMessage:
     role: Literal['system', 'user', 'assistant']
-    content: Union[str, List[Dict[str, Any]]]
+    content: Union[str, List[Dict[str, Any]], int, float]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None
+    reasoning_content: Optional[str] = None
 
 
 @dataclass
@@ -234,11 +274,29 @@ class ChatCompletionResponseChoice:
     message: ChatMessage
     finish_reason: Literal['stop', 'length', None]
     logprobs: Optional[Dict[str, List[Dict[str, Any]]]] = None
+    token_ids: Optional[List[int]] = None
 
     def to_cmpl_choice(self) -> 'CompletionResponseChoice':
         self = deepcopy(self)
         assert not self.message.tool_calls, f'message: {self.message}'
         return CompletionResponseChoice(self.index, self.message.content, self.finish_reason, self.logprobs)
+
+
+@dataclass
+class EmbeddingResponseData:
+    object: str = 'embedding'
+    index: int = 0
+    embedding: List[str] = field(default_factory=lambda: [])
+
+
+@dataclass
+class EmbeddingResponse:
+    model: str
+    data: List[EmbeddingResponseData]
+    usage: UsageInfo
+    id: str = field(default_factory=lambda: f'chatcmpl-{random_uuid()}')
+    object: str = 'list'
+    created: int = field(default_factory=lambda: int(time.time()))
 
 
 @dataclass
@@ -257,12 +315,72 @@ class ChatCompletionResponse:
     id: str = field(default_factory=lambda: f'chatcmpl-{random_uuid()}')
     object: str = 'chat.completion'
     created: int = field(default_factory=lambda: int(time.time()))
+    prompt_token_ids: Optional[List[int]] = None
+    images_size: Optional[List[Tuple[int, int]]] = None
 
     def to_cmpl_response(self) -> 'CompletionResponse':
         self = deepcopy(self)
         choices = [choice.to_cmpl_choice() for choice in self.choices]
         id_ = f'cmpl{self.id[len("chatcmpl"):]}'
         return CompletionResponse(self.model, choices, self.usage, id_, created=self.created)
+
+
+class RolloutOutput(BaseModel):
+    """
+    Output structure for rollout.
+
+    Attributes:
+        response (ChatCompletionResponse):
+            The model's response
+
+        messages (Optional[Messages]):
+            (Optional) Conversation history for the final rollout; required for multi-turn scenarios.
+            NOTE:
+                - If provided, this messages sequence will overwrite the original messages.
+                - If not provided, 'response' will be appended as the latest turn in the original messages.
+                - For multi-turn training, you need to manually return the updated messages, including the full history.
+                - The messages should include the latest assistant response as the final message.
+
+        response_token_ids (Optional[List[List[int]]]):
+            (Optional) Token IDs generated at each rollout turn.
+            If provided, the training process will skip tokenizing the response.
+
+        response_loss_mask (Optional[List[List[int]]]):
+            (Optional) Loss masks corresponding to each rollout turn.
+            If provided, the training process will skip computing loss masks for the response (as controlled by the `loss_scale` parameter). # noqa
+
+        rollout_infos (Dict[str, Any]):
+            (Optional) Additional rollout information. This must be JSON-serializable.
+    """
+    response: ChatCompletionResponse
+    # multi turn
+    messages: Optional[Messages] = None
+    response_token_ids: List[List[int]] = Field(default_factory=list)
+    response_loss_mask: List[List[int]] = Field(default_factory=list)
+    rollout_infos: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator('response_token_ids', 'response_loss_mask', mode='before')
+    @classmethod
+    def _wrap_flat_list(cls, v):
+        if isinstance(v, list) and v and isinstance(v[0], int):
+            return [v]
+        return v
+
+    def model_post_init(self, __context):
+        # Ensure multimodal data in rollout_infos is serializable (e.g., images to base64)
+        super().model_post_init(__context)
+        self.mminfo_to_serializable()
+
+    def mminfo_to_serializable(self):
+        mm_keys = ['images', 'audios', 'videos']
+
+        for key, values in self.rollout_infos.items():
+            if key in mm_keys:
+                if not isinstance(values, list):
+                    values = [values]
+                for i, value in enumerate(values):
+                    values[i] = MultiModalRequestMixin.to_base64(value)
+                self.rollout_infos[key] = values
 
 
 @dataclass
@@ -280,6 +398,7 @@ class DeltaMessage:
     role: Literal['system', 'user', 'assistant', None] = None
     content: Optional[str] = None
     tool_calls: Optional[List[ChatCompletionMessageToolCall]] = None
+    reasoning_content: Optional[str] = None
 
 
 @dataclass
@@ -327,3 +446,16 @@ class CompletionStreamResponse:
     id: str = field(default_factory=lambda: f'cmpl-{random_uuid()}')
     object: str = 'text_completion.chunk'
     created: int = field(default_factory=lambda: int(time.time()))
+
+
+class InitCommunicatorRequest(BaseModel):
+    host: str
+    port: int
+    world_size: int
+    client_device_uuid: Optional[str] = None
+
+
+class UpdateWeightsRequest(BaseModel):
+    name: str
+    dtype: str
+    shape: list[int]

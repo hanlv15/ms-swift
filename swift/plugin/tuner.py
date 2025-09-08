@@ -1,15 +1,20 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
+from typing import TYPE_CHECKING, Optional
+
 import torch
 from peft import IA3Config, PeftModel, get_peft_model
 
-from swift.llm import MODEL_ARCH_MAPPING, ModelKeys
+from swift.llm import ModelKeys
 from swift.utils import find_all_linears
+
+if TYPE_CHECKING:
+    from swift.llm import TrainArguments
 
 
 class Tuner:
 
     @staticmethod
-    def prepare_model(args: 'TrainArguments', model: torch.nn.Module):
+    def prepare_model(args: 'TrainArguments', model: torch.nn.Module) -> torch.nn.Module:
         """Prepare a new model with a tuner
 
         Args:
@@ -25,9 +30,10 @@ class Tuner:
     def save_pretrained(
         model: torch.nn.Module,
         save_directory: str,
+        state_dict: Optional[dict] = None,
         safe_serialization: bool = True,
         **kwargs,
-    ):
+    ) -> None:
         """Save when save_steps reaches
 
         Args:
@@ -38,7 +44,7 @@ class Tuner:
         raise NotImplementedError
 
     @staticmethod
-    def from_pretrained(model: torch.nn.Module, model_id: str, **kwargs):
+    def from_pretrained(model: torch.nn.Module, model_id: str, **kwargs) -> torch.nn.Module:
         """Load the ckpt_dir
 
         Args:
@@ -56,14 +62,14 @@ class PeftTuner(Tuner):
     def save_pretrained(
         model: torch.nn.Module,
         save_directory: str,
+        state_dict: Optional[dict] = None,
         safe_serialization: bool = True,
         **kwargs,
-    ):
-        model: PeftModel
+    ) -> None:
         model.save_pretrained(save_directory, safe_serialization=safe_serialization, **kwargs)
 
     @staticmethod
-    def from_pretrained(model: torch.nn.Module, model_id: str, **kwargs):
+    def from_pretrained(model: torch.nn.Module, model_id: str, **kwargs) -> torch.nn.Module:
         return PeftModel.from_pretrained(model, model_id, **kwargs)
 
 
@@ -71,8 +77,8 @@ class PeftTuner(Tuner):
 class IA3(PeftTuner):
 
     @staticmethod
-    def prepare_model(args: 'TrainArguments', model: torch.nn.Module):
-        model_arch: ModelKeys = MODEL_ARCH_MAPPING[model.model_meta.model_arch]
+    def prepare_model(args: 'TrainArguments', model: torch.nn.Module) -> torch.nn.Module:
+        model_arch: ModelKeys = model.model_meta.model_arch
         ia3_config = IA3Config(
             target_modules=find_all_linears(model), feedforward_modules='.*' + model_arch.mlp.split('{}.')[1] + '.*')
         return get_peft_model(model, ia3_config)
@@ -81,7 +87,7 @@ class IA3(PeftTuner):
 class DummyTuner(PeftTuner):
 
     @staticmethod
-    def prepare_model(args: 'TrainArguments', model: torch.nn.Module):
+    def prepare_model(args: 'TrainArguments', model: torch.nn.Module) -> torch.nn.Module:
         return model
 
 

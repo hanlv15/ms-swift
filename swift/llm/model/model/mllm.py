@@ -6,13 +6,15 @@ import torch
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 from swift.llm import TemplateType
+from swift.llm.model.model.qwen import get_model_tokenizer_qwen2_vl
 from swift.utils import get_logger
 from ..constant import MLLMModelType
 from ..model_arch import ModelArch
-from ..patcher import patch_output_clone
+from ..patcher import patch_output_clone, patch_output_normalizer
 from ..register import (Model, ModelGroup, ModelMeta, get_model_tokenizer_multimodal,
                         get_model_tokenizer_with_flash_attn, register_model)
 from ..utils import ModelInfo, use_submodel_func
+from .qwen import patch_qwen_vl_utils
 
 logger = get_logger()
 
@@ -83,7 +85,7 @@ def get_model_tokenizer_molmoe(model_dir: str,
     if model is not None:
         model.config._to_dict = model.config.to_dict
         model.config.to_dict = MethodType(to_dict, model.config)
-
+        patch_output_clone(model.model.transformer.wte)
     return model, processor
 
 
@@ -113,8 +115,8 @@ def get_model_tokenizer_molmo(model_dir: str,
     model_cls = get_class_from_dynamic_module('modeling_molmo.MolmoForCausalLM', model_dir)
     model_cls._no_split_modules = ['MolmoSequentialBlock']
     model, processor = get_model_tokenizer_multimodal(model_dir, model_info, model_kwargs, load_model, **kwargs)
-
-    patch_output_clone(model.model.transformer.wte)
+    if model is not None:
+        patch_output_clone(model.model.transformer.wte)
     return model, processor
 
 
@@ -162,4 +164,63 @@ register_model(
         model_arch=ModelArch.megrez_omni,
         architectures=['MegrezO'],
         tags=['vision', 'audio'],
+    ))
+
+register_model(
+    ModelMeta(
+        MLLMModelType.qwen2_gme, [
+            ModelGroup([
+                Model('iic/gme-Qwen2-VL-2B-Instruct', 'Alibaba-NLP/gme-Qwen2-VL-2B-Instruct'),
+                Model('iic/gme-Qwen2-VL-7B-Instruct', 'Alibaba-NLP/gme-Qwen2-VL-7B-Instruct'),
+            ]),
+        ],
+        TemplateType.qwen2_gme,
+        get_model_tokenizer_qwen2_vl,
+        model_arch=ModelArch.qwen2_vl,
+        architectures=['Qwen2VLForConditionalGeneration'],
+        tags=['vision']))
+
+
+def get_model_tokenizer_keye_vl(model_dir: str, *args, **kwargs):
+    model, processor = get_model_tokenizer_multimodal(model_dir, *args, **kwargs)
+    from keye_vl_utils import vision_process
+    patch_qwen_vl_utils(vision_process)
+    return model, processor
+
+
+register_model(
+    ModelMeta(
+        MLLMModelType.keye_vl,
+        [
+            ModelGroup([
+                Model('Kwai-Keye/Keye-VL-8B-Preview', 'Kwai-Keye/Keye-VL-8B-Preview'),
+            ]),
+        ],
+        TemplateType.keye_vl,
+        get_model_tokenizer_keye_vl,
+        model_arch=ModelArch.keye_vl,
+        architectures=['KeyeVLForConditionalGeneration'],
+        tags=['vision'],
+        requires=['keye_vl_utils'],
+    ))
+
+
+def get_model_tokenizer_dots_ocr(model_dir, *args, **kwargs):
+    model_cls = get_class_from_dynamic_module('modeling_dots_vision.DotsVisionTransformer', model_dir)
+    model_cls._no_split_modules = ['DotsVisionBlock']
+    model, processor = get_model_tokenizer_multimodal(model_dir, *args, **kwargs)
+    return model, processor
+
+
+register_model(
+    ModelMeta(
+        MLLMModelType.dots_ocr,
+        [ModelGroup([
+            Model('rednote-hilab/dots.ocr', 'rednote-hilab/dots.ocr'),
+        ])],
+        TemplateType.dots_ocr,
+        get_model_tokenizer_dots_ocr,
+        model_arch=ModelArch.dots_ocr,
+        architectures=['DotsOCRForCausalLM'],
+        requires=['transformers>=4.51.0'],
     ))

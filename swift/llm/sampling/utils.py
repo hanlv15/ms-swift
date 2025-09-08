@@ -44,10 +44,18 @@ def get_reward(model: Any,
     gt_param = {}
     if 'ground_truths' in parameters:
         gt_param = {'ground_truths': ground_truths}
+    if isinstance(infer_requests[0], dict):
+        infer_requests = [InferRequest(messages=req['messages']) for req in infer_requests]
     rewards = infer_func(infer_requests, request_config=request_config, **gt_param)
     from swift.llm.infer.protocol import ChatCompletionResponse
     if isinstance(rewards[0], ChatCompletionResponse):
-        rewards = [float(r.choices[0].message.content) for r in rewards]
+        print('reward:', rewards[0].choices[0].message.content)
+        if isinstance(rewards[0].choices[0].message.content, str):
+            rewards = [float(r.choices[0].message.content.strip('[]')) for r in rewards]
+        elif isinstance(rewards[0].choices[0].message.content, list):
+            rewards = [float(min(r.choices[0].message.content)) for r in rewards]
+        else:
+            rewards = [float(r.choices[0].message.content) for r in rewards]
     arr = []
     for reward in rewards:
         if isinstance(reward, (list, tuple)):

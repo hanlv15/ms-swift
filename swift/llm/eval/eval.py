@@ -1,8 +1,7 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
-import datetime as dt
 import os
 from contextlib import nullcontext
-from typing import List, Union
+from typing import List, Optional, Union
 
 from evalscope.constants import EvalBackend, EvalType
 from evalscope.run import TaskConfig, run_task
@@ -27,9 +26,8 @@ class SwiftEval(SwiftPipeline):
         deploy_context = nullcontext() if args.eval_url else run_deploy(args, return_url=True)
         with deploy_context as base_url:
             base_url = args.eval_url or base_url
-            url = f"{base_url.rstrip('/')}/chat/completions"
 
-            task_cfg = self.get_task_cfg(args.eval_dataset, args.eval_backend, url)
+            task_cfg = self.get_task_cfg(args.eval_dataset, args.eval_backend, base_url)
             result = self.get_task_result(task_cfg)
             eval_report[args.eval_backend] = result
 
@@ -57,8 +55,11 @@ class SwiftEval(SwiftPipeline):
                     result[report['dataset']] = {report['metric']: report[self.args.model_suffix]}
         elif task_cfg.eval_backend == EvalBackend.VLM_EVAL_KIT:
             for report in reports:
-                metric = next(iter(report)).rsplit('_')[-1]
-                dataset = next(iter(report)).rsplit('_')[-2]
+                splited_key = next(iter(report)).rsplit('_', 2)
+                if len(splited_key) == 3:
+                    _, dataset, metric = splited_key
+                else:
+                    dataset, metric = '-', '-'
                 result[dataset] = {metric: list(report.values())[0]}
         else:
             result = reports
@@ -100,9 +101,14 @@ class SwiftEval(SwiftPipeline):
             work_dir=work_dir,
             limit=args.eval_limit,
             eval_batch_size=args.eval_num_proc,
-            dataset_args=args.dataset_args)
+            dataset_args=args.dataset_args,
+            generation_config=args.eval_generation_config,
+            **args.extra_eval_args)
 
     def get_opencompass_task_cfg(self, dataset: List[str], url: str):
+        # Must use chat/completion endpoint
+        url = f"{url.rstrip('/')}/chat/completions"
+
         args = self.args
         work_dir = os.path.join(args.eval_output_dir, 'opencompass')
         return TaskConfig(
@@ -126,6 +132,9 @@ class SwiftEval(SwiftPipeline):
             work_dir=work_dir)
 
     def get_vlmeval_task_cfg(self, dataset: List[str], url: str):
+        # Must use chat/completion endpoint
+        url = f"{url.rstrip('/')}/chat/completions"
+
         args = self.args
         work_dir = os.path.join(args.eval_output_dir, 'vlmeval')
         return TaskConfig(
@@ -138,6 +147,7 @@ class SwiftEval(SwiftPipeline):
                     'name': 'CustomAPIModel',
                     'api_base': url,
                     'key': args.api_key or 'EMPTY',
+                    **args.eval_generation_config
                 }],
                 'nproc':
                 args.eval_num_proc,
@@ -147,5 +157,5 @@ class SwiftEval(SwiftPipeline):
             work_dir=work_dir)
 
 
-def eval_main(args: Union[List[str], EvalArguments, None] = None):
+def eval_main(args: Optional[Union[List[str], EvalArguments]] = None):
     return SwiftEval(args).main()

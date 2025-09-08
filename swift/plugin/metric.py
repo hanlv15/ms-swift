@@ -5,9 +5,10 @@ from typing import Dict, List, Literal
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from transformers.trainer_utils import EvalPrediction
 
-from swift.utils import Serializer, get_logger
+from swift.utils import Serializer, get_current_device, get_logger
 
 logger = get_logger()
 
@@ -74,17 +75,25 @@ class InferStats(Metric):
 
 class MeanMetric(Metric):
 
-    def __init__(self, nan_value=0):
+    def __init__(self, nan_value=0, device=None, group=None):
         super().__init__()
         self.nan_value = nan_value
         self.add_state('state', default=0.)
         self.add_state('count', default=0)
+        if device is None:
+            device = get_current_device()
+        self.device = device
+        self.group = group
 
     def update(self, state: torch.Tensor):
         if isinstance(state, (torch.Tensor, np.ndarray)):
-            state = state.tolist()
-
-        if isinstance(state, (list, tuple)):
+            if state.ndim == 0:
+                count = 1
+                state = state.item()
+            else:
+                count = state.shape[0]
+                state = state.sum().item()
+        elif isinstance(state, (list, tuple)):
             count = len(state)
             state = sum(state)
         else:
@@ -94,8 +103,16 @@ class MeanMetric(Metric):
         self.count += count
 
     def compute(self):
+        if dist.is_initialized():
+            tensor = torch.tensor([self.state, self.count], device=self.device)
+            dist.all_reduce(tensor, op=dist.ReduceOp.SUM, group=self.group)
+            self.state, self.count = tensor[0].item(), int(tensor[1].item())
+        if self.count == 0:
+            value = self.nan_value
+        else:
+            value = self.state / self.count
         return {
-            'value': self.state / self.count if self.count > 0 else self.nan_value,
+            'value': value,
         }
 
 
@@ -136,12 +153,14 @@ def compute_acc(preds,
                 is_encoder_decoder: bool = False) -> Dict[str, List[float]]:
 
     if isinstance(preds, torch.Tensor):
+        if torch.is_floating_point(labels):
+            return {}
         preds = preds.cpu().numpy()
         labels = labels.cpu().numpy()
     if preds.ndim >= 2 and not is_encoder_decoder:
         labels = labels[..., 1:]
         preds = preds[..., :-1]
-    if preds.shape != labels.shape:
+    if np.issubdtype(labels.dtype, np.floating) or preds.shape != labels.shape:
         return {}
 
     masks = labels != -100

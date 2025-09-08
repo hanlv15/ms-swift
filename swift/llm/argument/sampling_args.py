@@ -25,6 +25,7 @@ class SamplingArguments(BaseArguments):
     sampler_engine: Literal['pt', 'lmdeploy', 'vllm', 'no', 'client'] = 'pt'
     output_dir: str = 'sample_output'
     output_file: Optional[str] = None
+    resume: bool = False
     override_exist_file: bool = False
     num_return_sequences: int = 64
     num_sampling_per_gpu_batch_size: int = 1
@@ -55,6 +56,9 @@ class SamplingArguments(BaseArguments):
     def _init_model_info(self):
         if self.sampler_engine != 'client':
             return super()._init_model_info()
+        else:
+            self.model_info = None
+            self.model_meta = None
         self.task_type = 'causal_lm'
         return
 

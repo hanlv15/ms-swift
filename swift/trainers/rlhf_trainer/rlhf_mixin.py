@@ -1,78 +1,18 @@
 # Copyright (c) Alibaba, Inc. and its affiliates.
+import inspect
 from collections import defaultdict
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
+from functools import partial
 from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
 from transformers import PreTrainedModel
-from transformers.integrations import is_deepspeed_zero3_enabled
-
-try:
-    from trl import AutoModelForCausalLMWithValueHead
-except (ImportError, RuntimeError):
-    AutoModelForCausalLMWithValueHead = None
-
-
-class ModelWrapper(nn.Module):
-    # compat zero3 & rlhf
-    def __init__(self, model: nn.Module, ref_model: nn.Module):
-        super().__init__()
-        self._model = model
-        self._ref_model = ref_model
-
-    def forward(self, *args, **kwargs):
-        return self._model(*args, **kwargs)
-
-    def __getattr__(self, key: str):
-        """Forward missing attributes to the wrapped module."""
-        try:
-            return super().__getattr__(key)
-        except AttributeError:
-            if '_model' in dir(self):
-                return getattr(self._model, key)
-            raise
-
-    def load_state_dict(self, *args, **kwargs):
-        return self._model.load_state_dict(*args, **kwargs)
-
-    def state_dict(self, *args, **kwargs):
-        return self._model.state_dict(*args, **kwargs)
-
-    def parameters(self, *args, **kwargs):
-        return self._model.parameters(*args, **kwargs)
-
-    @staticmethod
-    @contextmanager
-    def _save_load_context(trainer):
-        # fix zero3 & save/load model
-        deepspeed_model = trainer.deepspeed
-        _new_model = deepspeed_model._model
-        _old_model = deepspeed_model.__dict__['module']
-        deepspeed_model.__dict__['module'] = _new_model
-        deepspeed_model._modules['module'] = _new_model
-        trainer.model = _new_model
-        try:
-            yield
-        finally:
-            deepspeed_model.__dict__['module'] = _old_model
-            deepspeed_model._modules['module'] = _old_model
-            trainer.model = _old_model
+from trl.models.utils import prepare_deepspeed
 
 
 class RLHFTrainerMixin:
-
-    @staticmethod
-    def get_model_config_attr(config, key):
-        for k in [None, 'language_config', 'llm_config', 'text_config']:
-            if k is None:
-                llm_config = config
-            else:
-                llm_config = getattr(config, k, None)
-            if llm_config:
-                val = getattr(llm_config, key)
-                if val is not None:
-                    return val
 
     def __init__(self,
                  model: Optional[Union[PreTrainedModel, nn.Module]] = None,
@@ -80,6 +20,7 @@ class RLHFTrainerMixin:
                  *_args,
                  **kwargs):
         from trl.trainer import disable_dropout_in_model
+        from swift.llm import HfConfigFactory
         self.ref_model = ref_model
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
         args = kwargs['args']
@@ -90,27 +31,49 @@ class RLHFTrainerMixin:
                 disable_dropout_in_model(self.ref_model)
 
         self.is_encoder_decoder = kwargs['template'].is_encoder_decoder
-        self.aux_loss_enabled = getattr(model.config, 'output_router_logits', False)
         self._peft_has_been_casted_to_bf16 = False
         self.generate_during_eval = getattr(args, 'generate_during_eval', False)
         if self.is_encoder_decoder:
-            self.decoder_start_token_id = self.get_model_config_attr(model.config, 'decoder_start_token_id')
-            self.pad_token_id = self.get_model_config_attr(model.config, 'pad_token_id')
+            self.decoder_start_token_id = HfConfigFactory.get_config_attr(model.config, 'decoder_start_token_id')
+            self.pad_token_id = HfConfigFactory.get_config_attr(model.config, 'pad_token_id')
         # not use
         self.is_vision_model = False
         self.label_pad_token_id = -100
         self.use_dpo_data_collator = True
-        if is_deepspeed_zero3_enabled() and ref_model is not None:
-            model = ModelWrapper(model, ref_model)
         super().__init__(model, *_args, **kwargs)
+        self.aux_loss_enabled = model.model_info.is_moe_model and args.router_aux_loss_coef > 0
+        self.aux_loss_coef = args.router_aux_loss_coef
+        if ref_model is not None:
+            if self.is_deepspeed_enabled:
+                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+            else:
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+
         self.padding_value = self.tokenizer.pad_token_id
 
-    def _save_checkpoint(self, model, *args, **kwargs):
-        context = nullcontext()
-        if hasattr(model, '_save_load_context'):
-            context = model._save_load_context(self)
-        with context:
-            return super()._save_checkpoint(model, *args, **kwargs)
+    def create_loss_and_metric(self, args):
+        return {}
+
+    def _prepare_inputs(self, inputs):
+        inputs = super()._prepare_inputs(inputs)
+        if self.template.sequence_parallel_size > 1:
+            from swift.trainers.sequence_parallel import sequence_parallel
+            sequence_parallel.prepare_inputs(inputs)
+        return inputs
+
+    def get_train_dataloader(self, *args, **kwargs):
+        train_dataloader = super().get_train_dataloader(*args, **kwargs)
+        base_dataloader = train_dataloader.base_dataloader if hasattr(
+            train_dataloader, 'base_dataloader') and isinstance(train_dataloader.base_dataloader,
+                                                                DataLoader) else train_dataloader
+        if base_dataloader.worker_init_fn is not None and not isinstance(
+                base_dataloader.worker_init_fn, partial) and 'num_workers' in inspect.signature(
+                    base_dataloader.worker_init_fn).parameters:
+            base_dataloader.worker_init_fn = partial(
+                base_dataloader.worker_init_fn,
+                num_workers=self.args.dataloader_num_workers,
+                rank=self.args.process_index)
+        return train_dataloader
 
     def concatenated_forward(
         self, model: nn.Module, batch: Dict[str, Union[List, torch.LongTensor]]
@@ -149,16 +112,17 @@ class RLHFTrainerMixin:
         with _patch_concatenated_forward():
             return super().concatenated_forward(model, model_kwargs)
 
-    def get_batch_logps(self, logits: torch.FloatTensor, labels: torch.LongTensor, *args, **kwargs):
-        if self.is_encoder_decoder:
-            labels = labels.clone()  # fix trl bug
-        return super().get_batch_logps(logits, labels, *args, **kwargs)
-
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         res = super().compute_loss(model, inputs, return_outputs=return_outputs)
         # compat transformers>=4.46.*
-        if num_items_in_batch is not None:
+        if num_items_in_batch is not None and self.model_accepts_loss_kwargs:
             loss = res[0] if return_outputs else res
-            loss /= self.args.gradient_accumulation_steps
+            loss = loss / self.args.gradient_accumulation_steps
             return (loss, res[1:]) if return_outputs else loss
         return res
+
+    def _get_train_sampler(self, train_dataset=None):
+        get_train_sampler = super()._get_train_sampler
+        parameters = inspect.signature(get_train_sampler).parameters
+        kwargs = {'train_dataset': train_dataset} if 'train_dataset' in parameters else {}
+        return get_train_sampler(**kwargs)
