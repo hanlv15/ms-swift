@@ -9,7 +9,6 @@ from megatron.training import get_args
 
 from swift.llm import get_packed_seq_params as _get_packed_seq_params
 from swift.llm import to_device
-from swift.utils import get_current_device
 
 
 def get_swift_datasets_provider(train_dataset, val_dataset):
@@ -33,9 +32,10 @@ def get_batch_on_this_tp_rank(data_iterator):
 
     data = next(data_iterator)
     is_finished = data.pop('is_finished', False)
-    data['labels'] = torch.roll(data['labels'], -1, dims=-1)
-    if 'loss_scale' in data:
-        data['loss_scale'] = torch.roll(data['loss_scale'], -1, dims=-1)
+    if args.task_type == 'causal_lm':
+        data['labels'] = torch.roll(data['labels'], -1, dims=-1)
+        if 'loss_scale' in data:
+            data['loss_scale'] = torch.roll(data['loss_scale'], -1, dims=-1)
     batch = to_device(data, 'cuda', non_blocking=True)
     if args.pipeline_model_parallel_size == 1:
         pass
@@ -127,6 +127,8 @@ def get_batch_on_this_cp_rank(batch: Dict[str, Any]):
         for key, val in batch.items():
             if key not in keys:
                 continue
+            if args.task_type == 'seq_cls' and key == 'labels':
+                continue
             if val is not None:
                 if key == 'decoder_input':
                     batch[key] = _split_tokens_decoder_input(val, packed_seq_params.cu_seqlens_q)
@@ -142,12 +144,9 @@ def get_batch(data_iterator):
     batch = get_batch_on_this_tp_rank(data_iterator)
     args = get_args()
     num_samples = batch.pop('num_samples')
-    position_ids = batch['position_ids']
-    if position_ids.ndim == 3:
-        text_position_ids = position_ids[0]
-        batch['position_ids'] = position_ids[1:]
-    else:
-        text_position_ids = position_ids
+    text_position_ids = batch.pop('text_position_ids', None)
+    if text_position_ids is None:
+        text_position_ids = batch.get('position_ids')
     if args.padding_free and text_position_ids is not None:
         batch['packed_seq_params'] = get_packed_seq_params(text_position_ids)
         batch['packed_seq_params'].num_samples = num_samples
